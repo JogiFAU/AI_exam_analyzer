@@ -3,8 +3,6 @@
 import time
 from typing import Any, Dict, List, Optional
 
-from openai import OpenAI
-
 from ai_exam_analyzer.config import PIPELINE_VERSION
 from ai_exam_analyzer.io_utils import save_json
 from ai_exam_analyzer.passes import run_pass_a, run_pass_b, should_run_pass_b
@@ -41,6 +39,11 @@ def process_questions(
     schema_a: Dict[str, Any],
     schema_b: Dict[str, Any],
 ) -> None:
+    try:
+        from openai import OpenAI
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("Missing dependency: install `openai` package (e.g. `pip install openai`).") from exc
+
     client = OpenAI()
 
     done = 0

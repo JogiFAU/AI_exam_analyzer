@@ -3,8 +3,6 @@
 import json
 from typing import Any, Dict, Optional
 
-from openai import OpenAI
-
 
 def is_reasoning_model(model: str) -> bool:
     """Heuristic: o-series + gpt-5* are treated as reasoning models (may reject temperature/top_p)."""
@@ -13,7 +11,7 @@ def is_reasoning_model(model: str) -> bool:
 
 
 def call_json_schema(
-    client: OpenAI,
+    client: Any,
     *,
     model: str,
     system: str,

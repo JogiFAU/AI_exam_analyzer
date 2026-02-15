@@ -3,13 +3,11 @@
 import json
 from typing import Any, Dict
 
-from openai import OpenAI
-
 from ai_exam_analyzer.openai_client import call_json_schema
 
 
 def run_pass_a(
-    client: OpenAI,
+    client: Any,
     *,
     topic_catalog_text: str,
     payload: Dict[str, Any],
@@ -45,7 +43,7 @@ def run_pass_a(
 
 
 def run_pass_b(
-    client: OpenAI,
+    client: Any,
     *,
     topic_catalog_text: str,
     payload: Dict[str, Any],
