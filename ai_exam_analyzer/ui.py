@@ -71,9 +71,25 @@ def _pick_file(initial_dir: str) -> Optional[str]:
 
 def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir: str, help_text: str, optional: bool = False) -> str:
     widget_key = f"{state_key}_input"
+    last_default_key = f"{state_key}_last_default"
+    default_candidate = default_path if os.path.exists(default_path) else ""
 
     if state_key not in st.session_state:
-        st.session_state[state_key] = default_path if os.path.exists(default_path) else ""
+        st.session_state[state_key] = default_candidate
+    if last_default_key not in st.session_state:
+        st.session_state[last_default_key] = default_candidate
+
+    previous_default = st.session_state.get(last_default_key, "")
+    current_value = st.session_state.get(state_key, "")
+
+    # Keep folder-derived defaults in sync while preserving manual overrides.
+    if current_value == previous_default and current_value != default_candidate:
+        st.session_state[state_key] = default_candidate
+    elif not current_value and default_candidate:
+        st.session_state[state_key] = default_candidate
+
+    st.session_state[last_default_key] = default_candidate
+
     if widget_key not in st.session_state:
         st.session_state[widget_key] = st.session_state[state_key]
     if st.session_state.get(widget_key) != st.session_state.get(state_key):
