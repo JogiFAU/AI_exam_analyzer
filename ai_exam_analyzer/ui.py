@@ -82,9 +82,9 @@ def _infer_subject_hint_from_topic_tree(topics_path: str) -> str:
     if not isinstance(topic_tree, dict):
         return ""
 
-    super_topics = topic_tree.get("superTopics") or []
-    if isinstance(super_topics, list) and super_topics:
-        return (super_topics[0].get("name") or "").strip()
+    subject = topic_tree.get("subject")
+    if isinstance(subject, str) and subject.strip():
+        return subject.strip()
     return ""
 
 
