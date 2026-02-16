@@ -31,6 +31,14 @@ def _resolve_path(*, folder: str, filename: str) -> str:
     return filename
 
 
+def _get_default_documents_dir() -> str:
+    home_dir = os.path.expanduser("~")
+    documents_dir = os.path.join(home_dir, "Documents")
+    if os.path.isdir(documents_dir):
+        return documents_dir
+    return home_dir
+
+
 def _pick_directory(initial_dir: str) -> Optional[str]:
     try:
         import tkinter as tk
@@ -62,31 +70,44 @@ def _pick_file(initial_dir: str) -> Optional[str]:
 
 
 def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir: str, help_text: str, optional: bool = False) -> str:
+    widget_key = f"{state_key}_input"
+
     if state_key not in st.session_state:
         st.session_state[state_key] = default_path if os.path.exists(default_path) else ""
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = st.session_state[state_key]
+    if st.session_state.get(widget_key) != st.session_state.get(state_key):
+        st.session_state[widget_key] = st.session_state[state_key]
 
     cols = st.columns([4, 1])
     with cols[0]:
-        chosen = st.text_input(label, key=state_key, help=help_text)
+        chosen = st.text_input(label, key=widget_key, help=help_text)
+        st.session_state[state_key] = (chosen or "").strip()
     with cols[1]:
         if st.button("📂 Wählen", key=f"{state_key}_btn", help="Datei per Dialog auswählen"):
             picked = _pick_file(start_dir)
             if picked:
                 st.session_state[state_key] = picked
-                chosen = picked
+                st.rerun()
             else:
                 st.warning("Datei-Dialog konnte nicht geöffnet werden (z. B. kein GUI-Support).")
 
     if optional:
-        return (chosen or "").strip()
+        return st.session_state.get(state_key, "").strip()
 
-    if not (chosen or "").strip():
+    if not st.session_state.get(state_key, "").strip():
         st.caption("❌ Noch keine Datei ausgewählt")
-    return (chosen or "").strip()
+    return st.session_state.get(state_key, "").strip()
 
 
 def _build_args() -> SimpleNamespace:
-    default_data_dir = st.session_state.get("data_folder", os.path.expanduser("~"))
+    if "data_folder" not in st.session_state:
+        st.session_state["data_folder"] = _get_default_documents_dir()
+    if "output_folder" not in st.session_state:
+        st.session_state["output_folder"] = st.session_state["data_folder"]
+
+    data_folder = st.session_state["data_folder"]
+    output_folder = st.session_state["output_folder"]
 
     input_default_name = os.path.basename(CONFIG["INPUT_PATH"]) or "export.json"
     topics_default_name = os.path.basename(CONFIG["TOPICS_PATH"]) or "topic-tree.json"
@@ -99,29 +120,28 @@ def _build_args() -> SimpleNamespace:
         st.header("Einstellungen")
 
         with st.expander("📁 Datenquellen", expanded=True):
-            folder_cols = st.columns([4, 1])
-            with folder_cols[0]:
-                data_folder = st.text_input(
-                    "Datenordner",
-                    value=default_data_dir,
-                    key="data_folder",
-                    help="Standardordner für alle Datei-Dialoge. Enthält idealerweise export.json, topic-tree.json, whitelist.json und knowledge.zip.",
-                ).strip()
-            with folder_cols[1]:
-                if st.button("📁 Ordner", key="pick_data_folder", help="Datenordner per Dialog auswählen"):
-                    picked_dir = _pick_directory(data_folder)
-                    if picked_dir:
-                        st.session_state["data_folder"] = picked_dir
-                        data_folder = picked_dir
-                    else:
-                        st.warning("Ordner-Dialog konnte nicht geöffnet werden (z. B. kein GUI-Support).")
+            st.caption("Datenordner (Standard für Dateiauswahl)")
+            st.code(data_folder)
+            if st.button("📁 Datenordner auswählen", key="pick_data_folder", help="Wählt den Hauptordner für Input-Dateien"):
+                picked_dir = _pick_directory(data_folder)
+                if picked_dir:
+                    old_data_folder = st.session_state["data_folder"]
+                    st.session_state["data_folder"] = picked_dir
+                    if st.session_state.get("output_folder") == old_data_folder:
+                        st.session_state["output_folder"] = picked_dir
+                    st.rerun()
+                else:
+                    st.warning("Ordner-Dialog konnte nicht geöffnet werden (z. B. kein GUI-Support).")
 
-            output_folder = st.text_input(
-                "Ausgabeordner",
-                value=st.session_state.get("output_folder", data_folder),
-                key="output_folder",
-                help="Ordner für die Ergebnisdatei.",
-            ).strip()
+            st.caption("Ausgabeordner")
+            st.code(output_folder)
+            if st.button("📁 Ausgabeordner auswählen", key="pick_output_folder", help="Wählt den Ordner für die Ausgabe-Datei"):
+                picked_output_dir = _pick_directory(output_folder)
+                if picked_output_dir:
+                    st.session_state["output_folder"] = picked_output_dir
+                    st.rerun()
+                else:
+                    st.warning("Ordner-Dialog konnte nicht geöffnet werden (z. B. kein GUI-Support).")
 
             defaults = [
                 ("Input", input_default_name),
