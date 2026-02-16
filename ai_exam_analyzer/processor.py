@@ -1,7 +1,7 @@
 """Core processing loop for question annotation."""
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ai_exam_analyzer.cleanup import cleanup_dataset
 from ai_exam_analyzer.config import PIPELINE_VERSION
@@ -62,6 +62,7 @@ def process_questions(
     schema_b: Dict[str, Any],
     cleanup_spec: Optional[Dict[str, Any]] = None,
     knowledge_base: Optional[KnowledgeBase] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> None:
     try:
         from openai import OpenAI
@@ -73,6 +74,21 @@ def process_questions(
     done = 0
     skipped = 0
     processed = 0
+    total_questions = len(questions)
+
+    def emit_progress(**payload: Any) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(payload)
+
+    emit_progress(
+        event="started",
+        processed=processed,
+        done=done,
+        skipped=skipped,
+        total=total_questions,
+        message="Analyse gestartet.",
+    )
 
     for i, q in enumerate(questions, start=1):
         if args.limit and processed >= args.limit:
@@ -81,6 +97,15 @@ def process_questions(
         if args.resume and isinstance(q.get("aiAudit"), dict):
             if q["aiAudit"].get("pipelineVersion") == PIPELINE_VERSION and q["aiAudit"].get("status") == "completed":
                 skipped += 1
+                emit_progress(
+                    event="question_skipped",
+                    index=i,
+                    total=total_questions,
+                    processed=processed,
+                    done=done,
+                    skipped=skipped,
+                    message=f"Frage {i}/{total_questions} übersprungen (bereits abgeschlossen).",
+                )
                 continue
 
         payload = build_question_payload(q)
@@ -112,6 +137,15 @@ def process_questions(
         }
 
         try:
+            emit_progress(
+                event="question_started",
+                index=i,
+                total=total_questions,
+                processed=processed,
+                done=done,
+                skipped=skipped,
+                message=f"Frage {i}/{total_questions}: Starte Pass A.",
+            )
             pass_a = run_pass_a(
                 client,
                 topic_catalog_text=topic_catalog_text,
@@ -150,6 +184,15 @@ def process_questions(
 
             if ran_b:
                 try:
+                    emit_progress(
+                        event="pass_b_started",
+                        index=i,
+                        total=total_questions,
+                        processed=processed,
+                        done=done,
+                        skipped=skipped,
+                        message=f"Frage {i}/{total_questions}: Starte Verifikation (Pass B).",
+                    )
                     pass_b = run_pass_b(
                         client,
                         topic_catalog_text=topic_catalog_text,
@@ -304,13 +347,42 @@ def process_questions(
         q["aiAudit"] = audit
 
         processed += 1
+        emit_progress(
+            event="question_finished",
+            index=i,
+            total=total_questions,
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            status=audit.get("status"),
+            message=f"Frage {i}/{total_questions} abgeschlossen (Status: {audit.get('status')}).",
+        )
         if args.checkpoint_every and processed % args.checkpoint_every == 0:
             out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
             save_json(args.output, out_obj)
             print(f"[{i}/{len(questions)}] checkpoint | processed={processed} done={done} skipped={skipped} lastStatus={audit.get('status')}")
+            emit_progress(
+                event="checkpoint_saved",
+                index=i,
+                total=total_questions,
+                processed=processed,
+                done=done,
+                skipped=skipped,
+                status=audit.get("status"),
+                message=f"Checkpoint gespeichert ({processed} verarbeitet).",
+            )
 
         time.sleep(args.sleep)
 
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
     print(f"Finished. processed={processed} done={done} skipped={skipped}. Output: {args.output}")
+    emit_progress(
+        event="finished",
+        processed=processed,
+        done=done,
+        skipped=skipped,
+        total=total_questions,
+        output_path=args.output,
+        message=f"Analyse abgeschlossen. Output: {args.output}",
+    )

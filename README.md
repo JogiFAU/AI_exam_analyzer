@@ -46,6 +46,23 @@ python classify_topics_merged_config_fixed.py \
   --output export.AIannotated.json
 ```
 
+## Lokale Benutzeroberfläche (UI)
+
+Es gibt jetzt eine Streamlit-Oberfläche, in der du:
+- alle wichtigen Einstellungen setzen kannst,
+- den OpenAI-Key eingeben kannst,
+- die Analyse per Button startest,
+- und den Live-Status (z. B. Frage X/Total, aktueller Schritt, Checkpoints) siehst.
+
+### Starten
+
+```bash
+pip install streamlit
+streamlit run run_ui.py
+```
+
+Die UI ist anschließend lokal unter `http://localhost:8501` erreichbar.
+
 ## Wissensbasis aus ZIP (PDF/TXT/MD) nutzen
 
 Für höhere Qualität kann ein Fach-Korpus (z. B. ZIP mit Vorlesungsfolien) direkt angebunden werden.
