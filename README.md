@@ -24,6 +24,7 @@ Die Pipeline arbeitet jetzt explizit in mehreren Schritten, passend zum gewünsc
 3. **Unabhängige Verifikation** in Pass B (`verify_answer`) bei Triggern wie niedriger Confidence oder Wartungsverdacht.
 4. **Finale Themenzuordnung** (`topic_final`) nach Abschluss der inhaltlichen Prüfung.
 5. **Finale Entscheidung + Flags** im Output:
+   - `topicInitial.reasonDetailed`, `topicFinal.reasonDetailed` und ausführliche Begründungen in der Antwortprüfung
    - `answerPlausibility.finalCorrectIndices`
    - `answerPlausibility.finalAnswerConfidence` (0..1)
    - `answerPlausibility.aiDisagreesWithDataset` (AI-Antwort weicht vom Datensatz ab)
@@ -76,6 +77,7 @@ und übergibt nur relevante Evidenz pro Frage an Pass A/Pass B.
 3. Pro Frage werden die relevantesten Chunks gesucht.
 4. Nur diese Chunks (`retrievedEvidence`) gehen in den Prompt.
 5. Audit enthält Evidenz + Retrieval-Qualität.
+   - Im Output werden Evidenzen kompakt als Quelle (PDF/Datei), Seite und Score gespeichert (ohne langen Chunk-Text).
 
 Hinweis: Bilder in PDFs werden ohne OCR nicht in Text umgewandelt. Für bildlastige Folien sollte OCR vorgeschaltet werden.
 

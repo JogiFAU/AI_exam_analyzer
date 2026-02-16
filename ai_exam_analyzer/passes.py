@@ -32,6 +32,7 @@ def run_pass_a(
         "- Nutze, falls vorhanden, das Feld retrievedEvidence als Fachkontext.\n"
         "- evidenceChunkIds muss die genutzten Chunk-IDs aus retrievedEvidence enthalten (oder []).\n"
         "- Antworte ausschließlich im vorgegebenen JSON-Schema.\n"
+        "- reasonShort ist sehr kurz; reasonDetailed ist eine ausführliche, nachvollziehbare Begründung.\n"
         "- proposedCorrectIndices sind 0-basiert.\n\n"
         f"{topic_catalog_text}"
     )
@@ -75,7 +76,8 @@ def run_pass_b(
         "- Nutze, falls vorhanden, das Feld question.retrievedEvidence als Fachkontext.\n"
         "- evidenceChunkIds muss die genutzten Chunk-IDs aus question.retrievedEvidence enthalten (oder []).\n"
         "- Sei konservativ: bei Zweifel keine Änderung bestätigen.\n"
-        "- Antworte ausschließlich im vorgegebenen JSON-Schema.\n\n"
+        "- Antworte ausschließlich im vorgegebenen JSON-Schema.\n"
+        "- reasonShort ist sehr kurz; reasonDetailed ist eine ausführliche, nachvollziehbare Begründung.\n\n"
         f"{topic_catalog_text}"
     )
     packed = {"question": payload, "passA": pass_a}
