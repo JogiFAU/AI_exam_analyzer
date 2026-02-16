@@ -3,6 +3,7 @@
 import time
 from typing import Any, Dict, List, Optional
 
+from ai_exam_analyzer.cleanup import cleanup_dataset
 from ai_exam_analyzer.config import PIPELINE_VERSION
 from ai_exam_analyzer.io_utils import save_json
 from ai_exam_analyzer.passes import run_pass_a, run_pass_b, should_run_pass_b
@@ -11,6 +12,18 @@ from ai_exam_analyzer.payload import build_question_payload
 
 def normalize_indices(indices: List[int], n_answers: int) -> List[int]:
     return sorted({i for i in indices if isinstance(i, int) and 0 <= i < n_answers})
+
+
+def _build_output_obj(
+    *,
+    container: Optional[Dict[str, Any]],
+    questions: List[Dict[str, Any]],
+    cleanup_spec: Optional[Dict[str, Any]],
+) -> Any:
+    out_obj: Any = container if container is not None else questions
+    if cleanup_spec is not None:
+        out_obj = cleanup_dataset(out_obj, cleanup_spec)
+    return out_obj
 
 
 def apply_correct_indices(q: Dict[str, Any], new_indices: List[int]) -> None:
@@ -38,6 +51,7 @@ def process_questions(
     topic_catalog_text: str,
     schema_a: Dict[str, Any],
     schema_b: Dict[str, Any],
+    cleanup_spec: Optional[Dict[str, Any]] = None,
 ) -> None:
     try:
         from openai import OpenAI
@@ -244,12 +258,12 @@ def process_questions(
 
         processed += 1
         if args.checkpoint_every and processed % args.checkpoint_every == 0:
-            out_obj = container if container is not None else questions
+            out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
             save_json(args.output, out_obj)
             print(f"[{i}/{len(questions)}] checkpoint | processed={processed} done={done} skipped={skipped} lastStatus={audit.get('status')}")
 
         time.sleep(args.sleep)
 
-    out_obj = container if container is not None else questions
+    out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
     print(f"Finished. processed={processed} done={done} skipped={skipped}. Output: {args.output}")

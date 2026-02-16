@@ -46,6 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--no-write-top-level", dest="write_top_level", action="store_false",
                     help="Do not write ai* convenience fields")
 
+    ap.add_argument("--cleanup-spec", default=CONFIG["CLEANUP_SPEC_PATH"],
+                    help="Optional JSON whitelist spec to keep only selected fields in output")
+
     ap.add_argument("--debug", dest="debug", action="store_true", default=CONFIG["DEBUG"],
                     help="Store raw pass outputs under aiAudit._debug")
     ap.add_argument("--no-debug", dest="debug", action="store_false",
@@ -78,6 +81,10 @@ def main() -> None:
     else:
         raise ValueError("Input must be a list of questions or {questions:[...]} object.")
 
+    cleanup_spec = None
+    if args.cleanup_spec:
+        cleanup_spec = load_json(args.cleanup_spec)
+
     process_questions(
         args=args,
         questions=questions,
@@ -86,6 +93,7 @@ def main() -> None:
         topic_catalog_text=topic_catalog_text,
         schema_a=schema_a,
         schema_b=schema_b,
+        cleanup_spec=cleanup_spec,
     )
 
 

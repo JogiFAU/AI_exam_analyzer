@@ -46,6 +46,44 @@ python classify_topics_merged_config_fixed.py \
   --output export.AIannotated.json
 ```
 
+## Optional: Clean-up des Output-Datensatzes
+
+Mit `--cleanup-spec <datei.json>` kann der Output nach der Verarbeitung auf definierte Felder reduziert werden.
+Die Spec ist eine Whitelist auf JSON-Ebene (nur gelistete Elemente bleiben erhalten).
+
+Beispiel `cleanup-spec.json`:
+
+```json
+{
+  "questions": {
+    "*": {
+      "id": true,
+      "text": true,
+      "answers": {
+        "*": {
+          "text": true,
+          "isCorrect": true
+        }
+      },
+      "correctIndices": true,
+      "aiAudit": true
+    }
+  }
+}
+```
+
+Anwendung:
+
+```bash
+python classify_topics_merged_config_fixed.py \
+  --input export.json \
+  --topics topic-tree.json \
+  --output export.AIannotated.json \
+  --cleanup-spec cleanup-spec.json
+```
+
+Hinweis: Die Bereinigung wirkt auf den geschriebenen Output (inkl. Checkpoints), nicht auf die interne Analyse-Logik.
+
 ## Hinweise zu potenziellen Problemen (ohne Funktionsänderung)
 
 Siehe `KNOWN_ISSUES.md`.
