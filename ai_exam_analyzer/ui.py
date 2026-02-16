@@ -18,12 +18,46 @@ from ai_exam_analyzer.schemas import schema_pass_a, schema_pass_b
 from ai_exam_analyzer.topic_catalog import build_topic_catalog, format_topic_catalog_for_prompt
 
 
+def _resolve_path(*, folder: str, filename: str) -> str:
+    folder = (folder or "").strip()
+    filename = (filename or "").strip()
+
+    if not filename:
+        return ""
+    if os.path.isabs(filename):
+        return filename
+    if folder:
+        return os.path.join(folder, filename)
+    return filename
+
+
 def _build_args() -> SimpleNamespace:
+    default_data_dir = os.path.expanduser("~")
+
+    input_default_name = os.path.basename(CONFIG["INPUT_PATH"]) or "export.json"
+    topics_default_name = os.path.basename(CONFIG["TOPICS_PATH"]) or "topic-tree.json"
+    output_default_name = os.path.basename(CONFIG["OUTPUT_PATH"]) or "export.AIannotated.json"
+    cleanup_default_name = os.path.basename(CONFIG["CLEANUP_SPEC_PATH"]) or "whitelist.json"
+    knowledge_zip_default_name = os.path.basename(CONFIG["KNOWLEDGE_ZIP_PATH"]) or "knowledge.zip"
+    knowledge_index_default_name = os.path.basename(CONFIG["KNOWLEDGE_INDEX_PATH"]) or "knowledge.index.json"
+
     with st.sidebar:
         st.header("Einstellungen")
-        input_path = st.text_input("Input JSON", value=CONFIG["INPUT_PATH"])
-        topics_path = st.text_input("Topic-Tree JSON", value=CONFIG["TOPICS_PATH"])
-        output_path = st.text_input("Output JSON", value=CONFIG["OUTPUT_PATH"])
+        st.subheader("Dateien & Ordner")
+        data_folder = st.text_input(
+            "Datenordner (Input)",
+            value=default_data_dir,
+            help="Ordner mit Input- und Konfigurationsdateien (z. B. export.json, topic-tree.json, whitelist.json, knowledge.zip).",
+        ).strip()
+        output_folder = st.text_input(
+            "Ausgabeordner",
+            value=data_folder or default_data_dir,
+            help="Ordner, in dem die Output-Datei gespeichert wird.",
+        ).strip()
+
+        input_name = st.text_input("Input JSON Dateiname", value=input_default_name)
+        topics_name = st.text_input("Topic-Tree JSON Dateiname", value=topics_default_name)
+        output_name = st.text_input("Output JSON Dateiname", value=output_default_name)
 
         st.subheader("API")
         api_key_value = os.getenv("OPENAI_API_KEY", "")
@@ -61,11 +95,26 @@ def _build_args() -> SimpleNamespace:
 
         write_top_level = st.checkbox("Top-Level ai* Felder schreiben", value=CONFIG["WRITE_TOP_LEVEL"])
         debug = st.checkbox("Debug-Rohdaten speichern", value=CONFIG["DEBUG"])
-        cleanup_spec = st.text_input("Cleanup-Spec JSON (optional)", value=CONFIG["CLEANUP_SPEC_PATH"])
+        use_cleanup_spec = st.checkbox("Whitelist/Cleanup anwenden", value=bool(CONFIG["CLEANUP_SPEC_PATH"]))
+        cleanup_spec_name = st.text_input(
+            "Whitelist/Cleanup JSON Dateiname (optional)",
+            value=cleanup_default_name,
+            disabled=not use_cleanup_spec,
+        )
 
         st.subheader("Knowledge Base (optional)")
-        knowledge_zip = st.text_input("Knowledge ZIP", value=CONFIG["KNOWLEDGE_ZIP_PATH"])
-        knowledge_index = st.text_input("Knowledge Index JSON", value=CONFIG["KNOWLEDGE_INDEX_PATH"])
+        use_knowledge_zip = st.checkbox("Knowledge ZIP verwenden", value=bool(CONFIG["KNOWLEDGE_ZIP_PATH"]))
+        knowledge_zip_name = st.text_input(
+            "Knowledge ZIP Dateiname (optional)",
+            value=knowledge_zip_default_name,
+            disabled=not use_knowledge_zip,
+        )
+        use_knowledge_index = st.checkbox("Knowledge Index verwenden", value=bool(CONFIG["KNOWLEDGE_INDEX_PATH"]))
+        knowledge_index_name = st.text_input(
+            "Knowledge Index JSON Dateiname (optional)",
+            value=knowledge_index_default_name,
+            disabled=not use_knowledge_index,
+        )
         knowledge_subject_hint = st.text_input("Subject Hint", value=CONFIG["KNOWLEDGE_SUBJECT_HINT"])
         knowledge_top_k = st.number_input("Knowledge Top-K", min_value=1, value=int(CONFIG["KNOWLEDGE_TOP_K"]))
         knowledge_max_chars = st.number_input("Knowledge Max Chars", min_value=500, value=int(CONFIG["KNOWLEDGE_MAX_CHARS"]), step=100)
@@ -76,6 +125,13 @@ def _build_args() -> SimpleNamespace:
             value=int(CONFIG["KNOWLEDGE_CHUNK_CHARS"]),
             step=100,
         )
+
+    input_path = _resolve_path(folder=data_folder, filename=input_name)
+    topics_path = _resolve_path(folder=data_folder, filename=topics_name)
+    output_path = _resolve_path(folder=output_folder, filename=output_name)
+    cleanup_spec = _resolve_path(folder=data_folder, filename=cleanup_spec_name) if use_cleanup_spec else ""
+    knowledge_zip = _resolve_path(folder=data_folder, filename=knowledge_zip_name) if use_knowledge_zip else ""
+    knowledge_index = _resolve_path(folder=data_folder, filename=knowledge_index_name) if use_knowledge_index else ""
 
     return SimpleNamespace(
         input=input_path,
