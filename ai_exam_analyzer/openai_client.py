@@ -1,7 +1,7 @@
 """OpenAI API helpers."""
 
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 
 def is_reasoning_model(model: str) -> bool:
@@ -15,7 +15,7 @@ def call_json_schema(
     *,
     model: str,
     system: str,
-    user: str,
+    user: Union[str, List[Dict[str, Any]]],
     schema: Dict[str, Any],
     format_name: str,
     temperature: Optional[float] = None,

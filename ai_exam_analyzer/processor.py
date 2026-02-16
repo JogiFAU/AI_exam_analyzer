@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 from ai_exam_analyzer.cleanup import cleanup_dataset
 from ai_exam_analyzer.config import PIPELINE_VERSION
 from ai_exam_analyzer.io_utils import save_json
+from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.knowledge_base import KnowledgeBase, build_query_text
 from ai_exam_analyzer.passes import run_pass_a, run_pass_b, should_run_pass_b
 from ai_exam_analyzer.payload import build_question_payload
@@ -62,6 +63,7 @@ def process_questions(
     schema_b: Dict[str, Any],
     cleanup_spec: Optional[Dict[str, Any]] = None,
     knowledge_base: Optional[KnowledgeBase] = None,
+    image_store: Optional[QuestionImageStore] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> None:
     try:
@@ -110,6 +112,12 @@ def process_questions(
 
         payload = build_question_payload(q)
 
+        question_images: List[Dict[str, Any]] = []
+        image_context: Dict[str, Any] = {"imageZipConfigured": bool(image_store is not None)}
+        if image_store is not None:
+            question_images, image_context = image_store.prepare_question_images(q)
+        payload["imageContext"] = image_context
+
         evidence_chunks: List[Dict[str, Any]] = []
         retrieval_quality = 0.0
         if knowledge_base is not None:
@@ -134,6 +142,7 @@ def process_questions(
                 "retrievalQuality": retrieval_quality,
                 "evidenceCount": len(evidence_chunks),
             },
+            "images": image_context,
         }
 
         try:
@@ -153,6 +162,7 @@ def process_questions(
                 schema=schema_a,
                 model=args.passA_model,
                 temperature=args.passA_temperature,
+                question_images=question_images,
             )
 
             proposed = normalize_indices(pass_a["answer_review"]["proposedCorrectIndices"], n_answers)
@@ -201,6 +211,7 @@ def process_questions(
                         schema=schema_b,
                         model=args.passB_model,
                         reasoning_effort=args.passB_reasoning_effort,
+                        question_images=question_images,
                     )
                     audit["models"]["passB"] = args.passB_model
 

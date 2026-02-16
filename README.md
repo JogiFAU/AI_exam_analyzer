@@ -106,6 +106,26 @@ Falls kein Gold-Set möglich ist, nutze ein konservatives Betriebsmodell:
 - Niedrige kombinierte Confidence automatisch als Wartungsfall markieren.
 - Fälle mit AI/Datensatz-Abweichung priorisiert manuell prüfen.
 
+## Fragebilder aus ZIP einbinden (images.zip)
+
+Wenn Fragen bildbasiert sind, können die Bilder direkt mit an das Modell übergeben werden.
+Standardmäßig nutzt die CLI `images.zip` (falls im Arbeitsverzeichnis vorhanden).
+
+- Dateinamen werden anhand des Musters `img_<frage-id>_<nr>.<ext>` der Frage zugeordnet.
+- Zusätzlich werden bestehende `imageFiles`-Referenzen aus dem Datensatz ausgewertet.
+- Bild-Metadaten landen pro Frage unter `aiAudit.images` (`providedImageCount`, `missingExpectedImageRefs`, …).
+- Fehlen erwartete Bilder, wird dies im Prompt explizit markiert, damit das Modell die Frage auf Wartungsbedarf setzen kann.
+
+### Beispielaufruf mit Bildern
+
+```bash
+python classify_topics_merged_config_fixed.py \
+  --input export.json \
+  --topics topic-tree.json \
+  --output export.AIannotated.json \
+  --images-zip images.zip
+```
+
 ## Optional: Clean-up des Output-Datensatzes
 
 Mit `--cleanup-spec <datei.json>` kann der Output nach der Verarbeitung auf definierte Felder reduziert werden.

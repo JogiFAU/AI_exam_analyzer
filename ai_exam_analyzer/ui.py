@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 import streamlit as st
 
 from ai_exam_analyzer.config import CONFIG
+from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.io_utils import load_json
 from ai_exam_analyzer.knowledge_base import (
     build_knowledge_base_from_zip,
@@ -148,6 +149,7 @@ def _build_args() -> SimpleNamespace:
     topics_default_name = os.path.basename(CONFIG["TOPICS_PATH"]) or "topic-tree.json"
     output_default_name = os.path.basename(CONFIG["OUTPUT_PATH"]) or "export.AIannotated.json"
     cleanup_default_name = os.path.basename(CONFIG["CLEANUP_SPEC_PATH"]) or "whitelist.json"
+    images_zip_default_name = os.path.basename(CONFIG["IMAGES_ZIP_PATH"]) or "images.zip"
     knowledge_zip_default_name = os.path.basename(CONFIG["KNOWLEDGE_ZIP_PATH"]) or "knowledge.zip"
     knowledge_index_default_name = os.path.basename(CONFIG["KNOWLEDGE_INDEX_PATH"]) or "knowledge.index.json"
 
@@ -183,6 +185,7 @@ def _build_args() -> SimpleNamespace:
                 ("Topic-Tree", topics_default_name),
                 ("Output", output_default_name),
                 ("Whitelist", cleanup_default_name),
+                ("Bilder ZIP", images_zip_default_name),
                 ("Knowledge ZIP", knowledge_zip_default_name),
             ]
             st.caption("Status im Datenordner (Standarddateien):")
@@ -226,6 +229,20 @@ def _build_args() -> SimpleNamespace:
                 help_text="Optionale whitelist.json bzw. Cleanup-Spec.",
                 optional=True,
             ) if use_cleanup_spec else ""
+
+            use_images_zip = st.checkbox(
+                "Fragenbilder ZIP nutzen",
+                value=bool(CONFIG["IMAGES_ZIP_PATH"]),
+                help="Wenn aktiv, werden Fragebilder aus einer ZIP geladen und dem Modell mitgegeben.",
+            )
+            images_zip = _file_picker_row(
+                state_key="images_zip_file",
+                label="Fragenbilder ZIP",
+                default_path=_resolve_path(folder=data_folder, filename=images_zip_default_name),
+                start_dir=data_folder,
+                help_text="ZIP mit Fragebildern (Dateinamen enthalten die Frage-ID).",
+                optional=True,
+            ) if use_images_zip else ""
 
             use_knowledge_zip = st.checkbox(
                 "Knowledge ZIP nutzen",
@@ -412,6 +429,7 @@ def _build_args() -> SimpleNamespace:
         write_top_level=write_top_level,
         debug=debug,
         cleanup_spec=cleanup_spec.strip(),
+        images_zip=images_zip.strip(),
         knowledge_zip=knowledge_zip.strip(),
         knowledge_index=knowledge_index.strip(),
         knowledge_subject_hint=knowledge_subject_hint.strip(),
@@ -420,6 +438,14 @@ def _build_args() -> SimpleNamespace:
         knowledge_min_score=float(knowledge_min_score),
         knowledge_chunk_chars=int(knowledge_chunk_chars),
     )
+
+
+def _prepare_image_store(args: SimpleNamespace) -> Optional[QuestionImageStore]:
+    if not args.images_zip:
+        return None
+    if not os.path.exists(args.images_zip):
+        raise FileNotFoundError(f"Fragenbilder-ZIP nicht gefunden: {args.images_zip}")
+    return QuestionImageStore.from_zip(args.images_zip)
 
 
 def _prepare_knowledge_base(args: SimpleNamespace, topic_tree: Any) -> Optional[Any]:
@@ -496,6 +522,7 @@ def main() -> None:
             raise ValueError("Input muss Liste oder Objekt mit 'questions' sein.")
 
         cleanup_spec = load_json(args.cleanup_spec) if args.cleanup_spec else None
+        image_store = _prepare_image_store(args)
         knowledge_base = _prepare_knowledge_base(args, topic_tree)
 
         recent_events = []
@@ -528,6 +555,7 @@ def main() -> None:
             schema_b=schema_b,
             cleanup_spec=cleanup_spec,
             knowledge_base=knowledge_base,
+            image_store=image_store,
             progress_callback=on_progress,
         )
 

@@ -13,11 +13,16 @@ def build_question_payload(q: Dict[str, Any]) -> Dict[str, Any]:
             "text": (a.get("text") or "").strip(),
         })
 
+    image_refs = [str(ref).strip() for ref in (q.get("imageFiles") or []) if str(ref).strip()]
+    image_urls = [str(url).strip() for url in (q.get("imageUrls") or []) if str(url).strip()]
+
     return {
         "questionId": q.get("id"),
         "questionText": (q.get("questionText") or "").strip(),
         "answers": answer_texts,
         "currentCorrectIndices": q.get("correctIndices") or [],
         "explanationText": (q.get("explanationText") or "").strip(),
-        "hasImages": bool(q.get("imageUrls") or q.get("imageFiles")),
+        "hasImages": bool(image_urls or image_refs),
+        "imageRefs": image_refs,
+        "imageUrls": image_urls,
     }
