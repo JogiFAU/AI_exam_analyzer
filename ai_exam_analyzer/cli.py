@@ -80,8 +80,23 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _derive_output_path(input_path: str, requested_output: str) -> str:
+    requested_output = (requested_output or "").strip()
+    if requested_output:
+        return requested_output
+
+    input_path = (input_path or "").strip()
+    input_dir = os.path.dirname(input_path)
+    input_name = os.path.basename(input_path)
+    stem, _ = os.path.splitext(input_name)
+    stem = stem or "export"
+    output_name = f"{stem} AIannotated.json"
+    return os.path.join(input_dir, output_name) if input_dir else output_name
+
+
 def main() -> None:
     args = build_parser().parse_args()
+    args.output = _derive_output_path(args.input, args.output)
 
     if not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY environment variable is not set.")

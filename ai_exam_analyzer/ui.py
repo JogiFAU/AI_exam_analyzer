@@ -32,6 +32,16 @@ def _resolve_path(*, folder: str, filename: str) -> str:
     return filename
 
 
+def _derive_output_path_from_input(input_path: str) -> str:
+    input_path = (input_path or "").strip()
+    input_dir = os.path.dirname(input_path)
+    input_name = os.path.basename(input_path)
+    stem, _ = os.path.splitext(input_name)
+    stem = stem or "export"
+    output_name = f"{stem} AIannotated.json"
+    return os.path.join(input_dir, output_name) if input_dir else output_name
+
+
 def _get_default_documents_dir() -> str:
     home_dir = os.path.expanduser("~")
     documents_dir = os.path.join(home_dir, "Documents")
@@ -89,10 +99,10 @@ def _infer_subject_hint_from_topic_tree(topics_path: str) -> str:
     return ""
 
 
-def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir: str, help_text: str, optional: bool = False) -> str:
+def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir: str, help_text: str, optional: bool = False, require_existing: bool = True) -> str:
     widget_key = f"{state_key}_input"
     last_default_key = f"{state_key}_last_default"
-    default_candidate = default_path if os.path.exists(default_path) else ""
+    default_candidate = default_path if (default_path and (os.path.exists(default_path) or (not require_existing))) else ""
 
     if state_key not in st.session_state:
         st.session_state[state_key] = default_candidate
@@ -147,7 +157,7 @@ def _build_args() -> SimpleNamespace:
 
     input_default_name = os.path.basename(CONFIG["INPUT_PATH"]) or "export.json"
     topics_default_name = os.path.basename(CONFIG["TOPICS_PATH"]) or "topic-tree.json"
-    output_default_name = os.path.basename(CONFIG["OUTPUT_PATH"]) or "export.AIannotated.json"
+    output_default_name = os.path.basename(CONFIG["OUTPUT_PATH"]) or ""
     cleanup_default_name = os.path.basename(CONFIG["CLEANUP_SPEC_PATH"]) or "whitelist.json"
     images_zip_default_name = os.path.basename(CONFIG["IMAGES_ZIP_PATH"]) or "images.zip"
     knowledge_zip_default_name = os.path.basename(CONFIG["KNOWLEDGE_ZIP_PATH"]) or "knowledge.zip"
@@ -180,10 +190,11 @@ def _build_args() -> SimpleNamespace:
                 else:
                     st.warning("Ordner-Dialog konnte nicht geöffnet werden (z. B. kein GUI-Support).")
 
+            output_status_name = output_default_name or os.path.basename(_derive_output_path_from_input(_resolve_path(folder=data_folder, filename=input_default_name)))
             defaults = [
                 ("Input", input_default_name),
                 ("Topic-Tree", topics_default_name),
-                ("Output", output_default_name),
+                ("Output", output_status_name),
                 ("Whitelist", cleanup_default_name),
                 ("Bilder ZIP", images_zip_default_name),
                 ("Knowledge ZIP", knowledge_zip_default_name),
@@ -208,12 +219,19 @@ def _build_args() -> SimpleNamespace:
                 start_dir=data_folder,
                 help_text="Topic-Struktur-Datei (z. B. topic-tree.json).",
             )
+            derived_output_path = _derive_output_path_from_input(input_path)
+            if output_default_name:
+                output_default_path = _resolve_path(folder=output_folder, filename=output_default_name)
+            else:
+                output_default_path = derived_output_path
+
             output_path = _file_picker_row(
                 state_key="output_file",
                 label="Output JSON",
-                default_path=_resolve_path(folder=output_folder, filename=output_default_name),
+                default_path=output_default_path,
                 start_dir=output_folder,
-                help_text="Zieldatei für annotierte Ausgabe.",
+                help_text="Zieldatei für annotierte Ausgabe (wird automatisch erstellt).",
+                require_existing=False,
             )
 
             use_cleanup_spec = st.checkbox(
@@ -412,7 +430,7 @@ def _build_args() -> SimpleNamespace:
     return SimpleNamespace(
         input=input_path,
         topics=topics_path,
-        output=output_path,
+        output=(output_path or _derive_output_path_from_input(input_path)),
         api_key=api_key,
         resume=resume,
         limit=int(limit),

@@ -3,7 +3,7 @@
 CONFIG = {
     "INPUT_PATH": "export.json",
     "TOPICS_PATH": "topic-tree.json",
-    "OUTPUT_PATH": "export.AIannotated.json",
+    "OUTPUT_PATH": "",
     "RESUME": False,
     "LIMIT": 0,
     "CHECKPOINT_EVERY": 10,

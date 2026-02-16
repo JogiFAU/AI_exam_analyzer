@@ -42,9 +42,10 @@ Der Grenzwert ist per CLI konfigurierbar:
 export OPENAI_API_KEY="..."
 python classify_topics_merged_config_fixed.py \
   --input export.json \
-  --topics topic-tree.json \
-  --output export.AIannotated.json
+  --topics topic-tree.json
 ```
+
+Wenn `--output` nicht gesetzt ist, wird automatisch `<Input-Dateiname> AIannotated.json` im selben Ordner erzeugt.
 
 ## Lokale Benutzeroberfläche (UI)
 
