@@ -84,6 +84,84 @@ python classify_topics_merged_config_fixed.py \
 
 Hinweis: Die Bereinigung wirkt auf den geschriebenen Output (inkl. Checkpoints), nicht auf die interne Analyse-Logik.
 
+## Qualitätsstrategie für höchste Ergebnisgüte
+
+Kurzantwort: **Dein Workflow ist grundsätzlich gut**, aber für maximale Qualität sollte er um einen kontrollierten **Kontext-Layer (RAG)**, strengere **Verifikationsregeln** und ein **Kalibrierungs-/Review-Setup** erweitert werden.
+
+### 1) Ist ein ZIP mit PDFs sinnvoll?
+Ja, aber nicht als "blindes Mitschicken" in jeden Prompt, sondern als **indizierte Wissensbasis**:
+
+1. ZIP entpacken.
+2. PDF-Text strukturiert extrahieren (Seiten, Überschriften, Absätze).
+3. In kleine, zitierfähige Chunks zerlegen.
+4. Embeddings + Vektorsuche aufbauen.
+5. Pro Frage nur die Top-K relevanten Chunks in den Prompt geben (mit Quelle/Seite).
+
+So erhältst du deutlich bessere fachliche Konsistenz, weniger Halluzinationen und bessere Themenzuordnung.
+
+### 2) Empfohlener Ziel-Workflow (High-Quality)
+
+**Schritt A – Retrieval vor Pass A**
+- Ermittele pro Frage relevante Kontextstellen aus dem Fachkorpus (Top-K + Mindest-Ähnlichkeit).
+- Übergib diese als "evidence" in Pass A.
+
+**Schritt B – Antwortentscheidung mit Evidenzpflicht**
+- Modell muss je vorgeschlagener Antwort kurz begründen, **welche Evidenz** sie stützt.
+- Fehlt belastbare Evidenz: Confidence absenken + Wartungsflag erhöhen.
+
+**Schritt C – Unabhängige Verifikation (Pass B) mit Gegenprüfung**
+- Pass B sieht Frage, Optionen, Datensatzlösung, Pass-A-Vorschlag und dieselbe Evidenz.
+- Pass B muss aktiv nach Gegenargumenten suchen ("disconfirming evidence").
+
+**Schritt D – Finale Themenzuordnung evidenzbasiert**
+- Topic nicht nur aus Frageformulierung, sondern aus dem tatsächlich nötigen Fachwissen ableiten.
+- Optional: hierarchisch klassifizieren (Supertopic -> Subtopic), jeweils mit eigener Confidence.
+
+### 3) Modellwahl (praxisnah)
+- **Pass A (breit, schnell):** robustes generalistisches Modell mit guter Kosten/Qualitäts-Balance.
+- **Pass B (strenger Verifier):** reasoning-stärkeres Modell mit konservativen Regeln.
+- Für strittige Fälle optional **Pass C (Tie-Breaker)** nur bei Konflikten oder sehr niedriger Confidence.
+
+### 4) Confidence wirklich belastbar machen
+Ein einzelner Modell-Confidence-Wert ist oft schlecht kalibriert. Besser ein kombinierter Score:
+
+- `answer_conf_model` (Modellselbsteinschätzung)
+- `retrieval_quality` (Ähnlichkeit/Abdeckung der gefundenen Quellen)
+- `agreement_score` (Pass A vs Pass B)
+- `option_margin` (Abstand beste vs zweitbeste Antwort)
+
+Daraus einen Gesamtwert berechnen (z. B. gewichtetes Mittel). Niedriger Gesamtwert => "Wartungsbedürftig".
+
+### 5) Konkrete Quality-Gates (empfohlen)
+- **Auto-Change nur**, wenn:
+  - Pass B zustimmt,
+  - Evidenz vorhanden,
+  - Gesamt-Confidence über Schwellwert,
+  - kein harter Widerspruch in Quellen.
+- **Human-Review-Pflicht**, wenn:
+  - AI ≠ Datensatz,
+  - Gesamt-Confidence niedrig,
+  - Themenzuordnung instabil (Pass A/B unterschiedlich),
+  - Frage ist mehrdeutig oder kontextabhängig.
+
+### 6) Metriken für echte Qualitätssteuerung
+Baue ein kleines Gold-Set (manuell geprüfte Fragen) und tracke:
+- Antwortgenauigkeit (Top-1 / ggf. Multi-Label F1)
+- Themenklassifikation (Accuracy + Confusion Matrix)
+- Precision bei "AI hat Datensatz geändert"
+- Anteil wartungsbedürftiger Fragen + Trefferquote dieser Markierung
+
+Nur mit diesen Metriken kannst du sicher entscheiden, ob neue Prompts/Modelle wirklich besser sind.
+
+### 7) Praktische Empfehlung für deinen nächsten Schritt
+1. ZIP/PDF-Korpus als RAG-Quelle integrieren (klein anfangen, z. B. 2-3 Fächer).
+2. Evidence-Felder in `aiAudit` speichern (Dokument, Seite, Chunk-ID).
+3. Gesamt-Confidence aus mehreren Signalen berechnen.
+4. Schwellenwerte mit einem Gold-Set kalibrieren.
+5. Erst dann aggressive Auto-Änderungen zulassen.
+
+Wenn du möchtest, kann ich im nächsten Schritt direkt eine konkrete **Datenstruktur für Evidence + Confidence-Komposition** und ein minimales **RAG-Interface** für deine bestehende Pipeline vorschlagen.
+
 ## Hinweise zu potenziellen Problemen (ohne Funktionsänderung)
 
 Siehe `KNOWN_ISSUES.md`.
