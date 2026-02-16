@@ -94,6 +94,10 @@ def process_questions(
             recommend_a = bool(pass_a["answer_review"]["recommendChange"])
             conf_a = float(pass_a["answer_review"]["confidence"])
 
+            ai_disagrees_with_dataset = len(proposed) > 0 and proposed != current
+            final_answer_confidence = conf_a
+            final_answer_confidence_source = "passA"
+
             will_change = False
             change_source = "none"
             final_correct_indices = current
@@ -134,6 +138,12 @@ def process_questions(
                     conf_b = float(v.get("confidence"))
                     verified = normalize_indices(v.get("verifiedCorrectIndices", []), n_answers)
 
+                    if len(verified) > 0 and verified != current:
+                        ai_disagrees_with_dataset = True
+
+                    final_answer_confidence = conf_b
+                    final_answer_confidence_source = "passB"
+
                     if (not cannot) and agree and (conf_b >= args.apply_change_min_conf_b) and len(verified) > 0 and verified != current:
                         apply_correct_indices(q, verified)
                         will_change = True
@@ -168,6 +178,13 @@ def process_questions(
                     "reasons": merged_reasons,
                 }
 
+            if (final_answer_confidence < args.low_conf_maintenance_threshold) or (final_topic_conf < args.low_conf_maintenance_threshold):
+                maintenance["needsMaintenance"] = True
+                maintenance["severity"] = max(int(maintenance.get("severity", 1)), 2)
+                maintenance["reasons"] = list(dict.fromkeys((maintenance.get("reasons") or []) + [
+                    "low_confidence_answer_or_topic"
+                ]))
+
             init_row = key_map[pass_a["topic_initial"]["topicKey"]]
             final_row = key_map[final_topic_key]
 
@@ -196,6 +213,9 @@ def process_questions(
                         "reasonShort": pass_a["answer_review"]["reasonShort"],
                     },
                     "finalCorrectIndices": final_correct_indices,
+                    "finalAnswerConfidence": final_answer_confidence,
+                    "finalAnswerConfidenceSource": final_answer_confidence_source,
+                    "aiDisagreesWithDataset": ai_disagrees_with_dataset,
                     "changedInDataset": bool(will_change),
                     "changeSource": change_source,
                     "verification": verification,

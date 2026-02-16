@@ -15,6 +15,27 @@ Dieses Projekt prüft Fragen-/Antwort-Daten über die OpenAI API inhaltlich und 
 - `ai_exam_analyzer/io_utils.py`: JSON laden/speichern.
 - `ai_exam_analyzer/config.py`: Default-Konfiguration.
 
+## Verbesserter Analyse-Workflow
+
+Die Pipeline arbeitet jetzt explizit in mehreren Schritten, passend zum gewünschten Ablauf:
+
+1. **Vorläufige Themenerkennung** (`topic_initial`) nur aus Frage + Antwortoptionen.
+2. **Inhaltliche Antwortprüfung** (`answer_review`) inkl. Plausibilitätsbewertung und Änderungsvorschlag.
+3. **Unabhängige Verifikation** in Pass B (`verify_answer`) bei Triggern wie niedriger Confidence oder Wartungsverdacht.
+4. **Finale Themenzuordnung** (`topic_final`) nach Abschluss der inhaltlichen Prüfung.
+5. **Finale Entscheidung + Flags** im Output:
+   - `answerPlausibility.finalCorrectIndices`
+   - `answerPlausibility.finalAnswerConfidence` (0..1)
+   - `answerPlausibility.aiDisagreesWithDataset` (AI-Antwort weicht vom Datensatz ab)
+   - `answerPlausibility.changedInDataset` (Datensatz wurde tatsächlich aktualisiert)
+
+Zusätzlich werden Fragen mit niedriger Sicherheit automatisch als wartungsbedürftig markiert.
+Der Grenzwert ist per CLI konfigurierbar:
+
+```bash
+--low-conf-maintenance-threshold 0.65
+```
+
 ## Ausführen
 
 ```bash

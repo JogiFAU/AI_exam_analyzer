@@ -36,6 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--trigger-topic-conf", type=float, default=CONFIG["TRIGGER_TOPIC_CONF"])
 
     ap.add_argument("--apply-change-min-conf-b", type=float, default=CONFIG["APPLY_CHANGE_MIN_CONF_B"])
+    ap.add_argument("--low-conf-maintenance-threshold", type=float,
+                    default=CONFIG["LOW_CONF_MAINTENANCE_THRESHOLD"],
+                    help="Below this confidence, auto-flag question as maintenance candidate")
 
     ap.add_argument("--write-top-level", dest="write_top_level", action="store_true",
                     default=CONFIG["WRITE_TOP_LEVEL"],
