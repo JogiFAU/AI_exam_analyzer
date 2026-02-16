@@ -69,6 +69,25 @@ def _pick_file(initial_dir: str) -> Optional[str]:
     return selected or None
 
 
+def _infer_subject_hint_from_topic_tree(topics_path: str) -> str:
+    topics_path = (topics_path or "").strip()
+    if not topics_path or (not os.path.exists(topics_path)):
+        return ""
+
+    try:
+        topic_tree = load_json(topics_path)
+    except Exception:
+        return ""
+
+    if not isinstance(topic_tree, dict):
+        return ""
+
+    super_topics = topic_tree.get("superTopics") or []
+    if isinstance(super_topics, list) and super_topics:
+        return (super_topics[0].get("name") or "").strip()
+    return ""
+
+
 def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir: str, help_text: str, optional: bool = False) -> str:
     widget_key = f"{state_key}_input"
     last_default_key = f"{state_key}_last_default"
@@ -236,6 +255,21 @@ def _build_args() -> SimpleNamespace:
                 optional=True,
             ) if use_knowledge_index else ""
 
+            inferred_subject_hint = _infer_subject_hint_from_topic_tree(topics_path)
+            subject_hint_default = inferred_subject_hint or CONFIG["KNOWLEDGE_SUBJECT_HINT"]
+            if "knowledge_subject_hint" not in st.session_state:
+                st.session_state["knowledge_subject_hint"] = subject_hint_default
+            if "knowledge_subject_hint_last_default" not in st.session_state:
+                st.session_state["knowledge_subject_hint_last_default"] = subject_hint_default
+
+            previous_subject_default = st.session_state["knowledge_subject_hint_last_default"]
+            current_subject_hint = st.session_state["knowledge_subject_hint"]
+            if current_subject_hint == previous_subject_default and current_subject_hint != subject_hint_default:
+                st.session_state["knowledge_subject_hint"] = subject_hint_default
+            elif (not current_subject_hint) and subject_hint_default:
+                st.session_state["knowledge_subject_hint"] = subject_hint_default
+            st.session_state["knowledge_subject_hint_last_default"] = subject_hint_default
+
         with st.expander("🔐 API", expanded=True):
             api_key_value = os.getenv("OPENAI_API_KEY", "")
             api_key = st.text_input(
@@ -326,8 +360,8 @@ def _build_args() -> SimpleNamespace:
         with st.expander("🧠 Knowledge Base", expanded=False):
             knowledge_subject_hint = st.text_input(
                 "Subject Hint",
-                value=CONFIG["KNOWLEDGE_SUBJECT_HINT"],
-                help="Optionaler Fach-Hinweis für besseres Matching.",
+                key="knowledge_subject_hint",
+                help="Standard wird aus dem Topic-Tree übernommen; kann hier manuell überschrieben werden.",
             )
             knowledge_top_k = st.number_input(
                 "Knowledge Top-K",
