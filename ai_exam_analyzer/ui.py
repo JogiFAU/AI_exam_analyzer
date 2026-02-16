@@ -31,8 +31,62 @@ def _resolve_path(*, folder: str, filename: str) -> str:
     return filename
 
 
+def _pick_directory(initial_dir: str) -> Optional[str]:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception:
+        return None
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    selected = filedialog.askdirectory(initialdir=initial_dir or os.path.expanduser("~"))
+    root.destroy()
+    return selected or None
+
+
+def _pick_file(initial_dir: str) -> Optional[str]:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except Exception:
+        return None
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    selected = filedialog.askopenfilename(initialdir=initial_dir or os.path.expanduser("~"))
+    root.destroy()
+    return selected or None
+
+
+def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir: str, help_text: str, optional: bool = False) -> str:
+    if state_key not in st.session_state:
+        st.session_state[state_key] = default_path if os.path.exists(default_path) else ""
+
+    cols = st.columns([4, 1])
+    with cols[0]:
+        chosen = st.text_input(label, key=state_key, help=help_text)
+    with cols[1]:
+        if st.button("📂 Wählen", key=f"{state_key}_btn", help="Datei per Dialog auswählen"):
+            picked = _pick_file(start_dir)
+            if picked:
+                st.session_state[state_key] = picked
+                chosen = picked
+            else:
+                st.warning("Datei-Dialog konnte nicht geöffnet werden (z. B. kein GUI-Support).")
+
+    if optional:
+        return (chosen or "").strip()
+
+    if not (chosen or "").strip():
+        st.caption("❌ Noch keine Datei ausgewählt")
+    return (chosen or "").strip()
+
+
 def _build_args() -> SimpleNamespace:
-    default_data_dir = os.path.expanduser("~")
+    default_data_dir = st.session_state.get("data_folder", os.path.expanduser("~"))
 
     input_default_name = os.path.basename(CONFIG["INPUT_PATH"]) or "export.json"
     topics_default_name = os.path.basename(CONFIG["TOPICS_PATH"]) or "topic-tree.json"
@@ -43,95 +97,230 @@ def _build_args() -> SimpleNamespace:
 
     with st.sidebar:
         st.header("Einstellungen")
-        st.subheader("Dateien & Ordner")
-        data_folder = st.text_input(
-            "Datenordner (Input)",
-            value=default_data_dir,
-            help="Ordner mit Input- und Konfigurationsdateien (z. B. export.json, topic-tree.json, whitelist.json, knowledge.zip).",
-        ).strip()
-        output_folder = st.text_input(
-            "Ausgabeordner",
-            value=data_folder or default_data_dir,
-            help="Ordner, in dem die Output-Datei gespeichert wird.",
-        ).strip()
 
-        input_name = st.text_input("Input JSON Dateiname", value=input_default_name)
-        topics_name = st.text_input("Topic-Tree JSON Dateiname", value=topics_default_name)
-        output_name = st.text_input("Output JSON Dateiname", value=output_default_name)
+        with st.expander("📁 Datenquellen", expanded=True):
+            folder_cols = st.columns([4, 1])
+            with folder_cols[0]:
+                data_folder = st.text_input(
+                    "Datenordner",
+                    value=default_data_dir,
+                    key="data_folder",
+                    help="Standardordner für alle Datei-Dialoge. Enthält idealerweise export.json, topic-tree.json, whitelist.json und knowledge.zip.",
+                ).strip()
+            with folder_cols[1]:
+                if st.button("📁 Ordner", key="pick_data_folder", help="Datenordner per Dialog auswählen"):
+                    picked_dir = _pick_directory(data_folder)
+                    if picked_dir:
+                        st.session_state["data_folder"] = picked_dir
+                        data_folder = picked_dir
+                    else:
+                        st.warning("Ordner-Dialog konnte nicht geöffnet werden (z. B. kein GUI-Support).")
 
-        st.subheader("API")
-        api_key_value = os.getenv("OPENAI_API_KEY", "")
-        api_key = st.text_input("OpenAI API Key", type="password", value=api_key_value)
+            output_folder = st.text_input(
+                "Ausgabeordner",
+                value=st.session_state.get("output_folder", data_folder),
+                key="output_folder",
+                help="Ordner für die Ergebnisdatei.",
+            ).strip()
 
-        st.subheader("Pipeline")
-        resume = st.checkbox("Resume aktiv", value=CONFIG["RESUME"])
-        limit = st.number_input("Limit (0 = alle Fragen)", min_value=0, value=int(CONFIG["LIMIT"]))
-        checkpoint_every = st.number_input(
-            "Checkpoint alle N Fragen",
-            min_value=1,
-            value=int(CONFIG["CHECKPOINT_EVERY"]),
-        )
-        sleep_seconds = st.number_input("Pause je Frage (Sek.)", min_value=0.0, value=float(CONFIG["SLEEP"]), step=0.05)
+            defaults = [
+                ("Input", input_default_name),
+                ("Topic-Tree", topics_default_name),
+                ("Output", output_default_name),
+                ("Whitelist", cleanup_default_name),
+                ("Knowledge ZIP", knowledge_zip_default_name),
+            ]
+            st.caption("Status im Datenordner (Standarddateien):")
+            for label, name in defaults:
+                path = _resolve_path(folder=data_folder, filename=name)
+                icon = "✅" if os.path.exists(path) else "❌"
+                st.caption(f"{icon} {label}: `{name}`")
 
-        pass_a_model = st.text_input("Pass A Modell", value=CONFIG["PASSA_MODEL"])
-        pass_b_model = st.text_input("Pass B Modell", value=CONFIG["PASSB_MODEL"])
-        pass_a_temperature = st.number_input("Pass A Temperature", min_value=0.0, max_value=2.0, value=float(CONFIG["PASSA_TEMPERATURE"]), step=0.1)
-        pass_b_reasoning_effort = st.selectbox(
-            "Pass B Reasoning Effort",
-            options=["low", "medium", "high"],
-            index=["low", "medium", "high"].index(CONFIG["PASSB_REASONING_EFFORT"]),
-        )
+            input_path = _file_picker_row(
+                state_key="input_file",
+                label="Input JSON",
+                default_path=_resolve_path(folder=data_folder, filename=input_default_name),
+                start_dir=data_folder,
+                help_text="Datei mit Fragen (z. B. export.json).",
+            )
+            topics_path = _file_picker_row(
+                state_key="topics_file",
+                label="Topic-Tree JSON",
+                default_path=_resolve_path(folder=data_folder, filename=topics_default_name),
+                start_dir=data_folder,
+                help_text="Topic-Struktur-Datei (z. B. topic-tree.json).",
+            )
+            output_path = _file_picker_row(
+                state_key="output_file",
+                label="Output JSON",
+                default_path=_resolve_path(folder=output_folder, filename=output_default_name),
+                start_dir=output_folder,
+                help_text="Zieldatei für annotierte Ausgabe.",
+            )
 
-        trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(CONFIG["TRIGGER_ANSWER_CONF"]), 0.01)
-        trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(CONFIG["TRIGGER_TOPIC_CONF"]), 0.01)
-        apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(CONFIG["APPLY_CHANGE_MIN_CONF_B"]), 0.01)
-        low_conf_maintenance_threshold = st.slider(
-            "Wartung markieren unter Confidence",
-            0.0,
-            1.0,
-            float(CONFIG["LOW_CONF_MAINTENANCE_THRESHOLD"]),
-            0.01,
-        )
+            use_cleanup_spec = st.checkbox(
+                "Whitelist/Cleanup nutzen",
+                value=bool(CONFIG["CLEANUP_SPEC_PATH"]),
+                help="Wenn aktiv, wird eine Whitelist/Cleanup-Spec auf das Ausgabeformat angewendet.",
+            )
+            cleanup_spec = _file_picker_row(
+                state_key="cleanup_file",
+                label="Whitelist/Cleanup JSON",
+                default_path=_resolve_path(folder=data_folder, filename=cleanup_default_name),
+                start_dir=data_folder,
+                help_text="Optionale whitelist.json bzw. Cleanup-Spec.",
+                optional=True,
+            ) if use_cleanup_spec else ""
 
-        write_top_level = st.checkbox("Top-Level ai* Felder schreiben", value=CONFIG["WRITE_TOP_LEVEL"])
-        debug = st.checkbox("Debug-Rohdaten speichern", value=CONFIG["DEBUG"])
-        use_cleanup_spec = st.checkbox("Whitelist/Cleanup anwenden", value=bool(CONFIG["CLEANUP_SPEC_PATH"]))
-        cleanup_spec_name = st.text_input(
-            "Whitelist/Cleanup JSON Dateiname (optional)",
-            value=cleanup_default_name,
-            disabled=not use_cleanup_spec,
-        )
+            use_knowledge_zip = st.checkbox(
+                "Knowledge ZIP nutzen",
+                value=bool(CONFIG["KNOWLEDGE_ZIP_PATH"]),
+                help="Wenn aktiv, wird Wissen aus einer ZIP-Datei geladen.",
+            )
+            knowledge_zip = _file_picker_row(
+                state_key="knowledge_zip_file",
+                label="Knowledge ZIP",
+                default_path=_resolve_path(folder=data_folder, filename=knowledge_zip_default_name),
+                start_dir=data_folder,
+                help_text="ZIP mit Wissensdokumenten (PDF/TXT/MD).",
+                optional=True,
+            ) if use_knowledge_zip else ""
 
-        st.subheader("Knowledge Base (optional)")
-        use_knowledge_zip = st.checkbox("Knowledge ZIP verwenden", value=bool(CONFIG["KNOWLEDGE_ZIP_PATH"]))
-        knowledge_zip_name = st.text_input(
-            "Knowledge ZIP Dateiname (optional)",
-            value=knowledge_zip_default_name,
-            disabled=not use_knowledge_zip,
-        )
-        use_knowledge_index = st.checkbox("Knowledge Index verwenden", value=bool(CONFIG["KNOWLEDGE_INDEX_PATH"]))
-        knowledge_index_name = st.text_input(
-            "Knowledge Index JSON Dateiname (optional)",
-            value=knowledge_index_default_name,
-            disabled=not use_knowledge_index,
-        )
-        knowledge_subject_hint = st.text_input("Subject Hint", value=CONFIG["KNOWLEDGE_SUBJECT_HINT"])
-        knowledge_top_k = st.number_input("Knowledge Top-K", min_value=1, value=int(CONFIG["KNOWLEDGE_TOP_K"]))
-        knowledge_max_chars = st.number_input("Knowledge Max Chars", min_value=500, value=int(CONFIG["KNOWLEDGE_MAX_CHARS"]), step=100)
-        knowledge_min_score = st.slider("Knowledge Min Score", 0.0, 1.0, float(CONFIG["KNOWLEDGE_MIN_SCORE"]), 0.01)
-        knowledge_chunk_chars = st.number_input(
-            "Knowledge Chunk Chars",
-            min_value=200,
-            value=int(CONFIG["KNOWLEDGE_CHUNK_CHARS"]),
-            step=100,
-        )
+            use_knowledge_index = st.checkbox(
+                "Knowledge-Index nutzen",
+                value=bool(CONFIG["KNOWLEDGE_INDEX_PATH"]),
+                help="Optionaler Index für schnelleren Start; wird geladen/geschrieben.",
+            )
+            knowledge_index = _file_picker_row(
+                state_key="knowledge_index_file",
+                label="Knowledge Index JSON",
+                default_path=_resolve_path(folder=data_folder, filename=knowledge_index_default_name),
+                start_dir=data_folder,
+                help_text="Optionaler Index-Cache als JSON.",
+                optional=True,
+            ) if use_knowledge_index else ""
 
-    input_path = _resolve_path(folder=data_folder, filename=input_name)
-    topics_path = _resolve_path(folder=data_folder, filename=topics_name)
-    output_path = _resolve_path(folder=output_folder, filename=output_name)
-    cleanup_spec = _resolve_path(folder=data_folder, filename=cleanup_spec_name) if use_cleanup_spec else ""
-    knowledge_zip = _resolve_path(folder=data_folder, filename=knowledge_zip_name) if use_knowledge_zip else ""
-    knowledge_index = _resolve_path(folder=data_folder, filename=knowledge_index_name) if use_knowledge_index else ""
+        with st.expander("🔐 API", expanded=True):
+            api_key_value = os.getenv("OPENAI_API_KEY", "")
+            api_key = st.text_input(
+                "OpenAI API Key",
+                type="password",
+                value=api_key_value,
+                help="API-Key für den Zugriff auf die OpenAI-Modelle.",
+            )
+
+        with st.expander("⚙️ Pipeline", expanded=False):
+            resume = st.checkbox("Resume aktiv", value=CONFIG["RESUME"], help="Überspringt bereits abgeschlossene Fragen.")
+            limit = st.number_input("Limit (0 = alle Fragen)", min_value=0, value=int(CONFIG["LIMIT"]), help="Begrenzt die Anzahl verarbeiteter Fragen.")
+            checkpoint_every = st.number_input(
+                "Checkpoint alle N Fragen",
+                min_value=1,
+                value=int(CONFIG["CHECKPOINT_EVERY"]),
+                help="Speichert regelmäßig Zwischenergebnisse.",
+            )
+            sleep_seconds = st.number_input(
+                "Pause je Frage (Sek.)",
+                min_value=0.0,
+                value=float(CONFIG["SLEEP"]),
+                step=0.05,
+                help="Kurze Pause zwischen zwei API-Aufrufen.",
+            )
+
+            pass_a_model = st.text_input("Pass A Modell", value=CONFIG["PASSA_MODEL"], help="Modell für Erstbewertung.")
+            pass_b_model = st.text_input("Pass B Modell", value=CONFIG["PASSB_MODEL"], help="Modell für Verifikation/Review.")
+            pass_a_temperature = st.number_input(
+                "Pass A Temperature",
+                min_value=0.0,
+                max_value=2.0,
+                value=float(CONFIG["PASSA_TEMPERATURE"]),
+                step=0.1,
+                help="Sampling-Temperatur für Pass A.",
+            )
+            pass_b_reasoning_effort = st.selectbox(
+                "Pass B Reasoning Effort",
+                options=["low", "medium", "high"],
+                index=["low", "medium", "high"].index(CONFIG["PASSB_REASONING_EFFORT"]),
+                help="Rechenaufwand für Pass B.",
+            )
+
+            trigger_answer_conf = st.slider(
+                "Pass B Trigger: Answer Confidence",
+                0.0,
+                1.0,
+                float(CONFIG["TRIGGER_ANSWER_CONF"]),
+                0.01,
+                help="Unterhalb dieses Werts wird Pass B ausgelöst (Antwort-Vertrauen).",
+            )
+            trigger_topic_conf = st.slider(
+                "Pass B Trigger: Topic Confidence",
+                0.0,
+                1.0,
+                float(CONFIG["TRIGGER_TOPIC_CONF"]),
+                0.01,
+                help="Unterhalb dieses Werts wird Pass B ausgelöst (Topic-Vertrauen).",
+            )
+            apply_change_min_conf_b = st.slider(
+                "Änderung anwenden ab Pass-B Confidence",
+                0.0,
+                1.0,
+                float(CONFIG["APPLY_CHANGE_MIN_CONF_B"]),
+                0.01,
+                help="Mindestvertrauen von Pass B, damit Antwortänderungen übernommen werden.",
+            )
+            low_conf_maintenance_threshold = st.slider(
+                "Wartung markieren unter Confidence",
+                0.0,
+                1.0,
+                float(CONFIG["LOW_CONF_MAINTENANCE_THRESHOLD"]),
+                0.01,
+                help="Unterhalb dieses Werts wird die Frage als Wartungsfall markiert.",
+            )
+
+            write_top_level = st.checkbox(
+                "Top-Level ai* Felder schreiben",
+                value=CONFIG["WRITE_TOP_LEVEL"],
+                help="Schreibt zusätzliche ai*-Felder direkt in jede Frage.",
+            )
+            debug = st.checkbox(
+                "Debug-Rohdaten speichern",
+                value=CONFIG["DEBUG"],
+                help="Speichert detaillierte Rohantworten unter aiAudit._debug.",
+            )
+
+        with st.expander("🧠 Knowledge Base", expanded=False):
+            knowledge_subject_hint = st.text_input(
+                "Subject Hint",
+                value=CONFIG["KNOWLEDGE_SUBJECT_HINT"],
+                help="Optionaler Fach-Hinweis für besseres Matching.",
+            )
+            knowledge_top_k = st.number_input(
+                "Knowledge Top-K",
+                min_value=1,
+                value=int(CONFIG["KNOWLEDGE_TOP_K"]),
+                help="Anzahl der Beleg-Chunks pro Frage.",
+            )
+            knowledge_max_chars = st.number_input(
+                "Knowledge Max Chars",
+                min_value=500,
+                value=int(CONFIG["KNOWLEDGE_MAX_CHARS"]),
+                step=100,
+                help="Maximale Gesamtlänge der übergebenen Belege.",
+            )
+            knowledge_min_score = st.slider(
+                "Knowledge Min Score",
+                0.0,
+                1.0,
+                float(CONFIG["KNOWLEDGE_MIN_SCORE"]),
+                0.01,
+                help="Mindestrelevanz eines Chunks.",
+            )
+            knowledge_chunk_chars = st.number_input(
+                "Knowledge Chunk Chars",
+                min_value=200,
+                value=int(CONFIG["KNOWLEDGE_CHUNK_CHARS"]),
+                step=100,
+                help="Chunk-Größe beim Parsen der ZIP-Datei.",
+            )
 
     return SimpleNamespace(
         input=input_path,
