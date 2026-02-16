@@ -3,7 +3,7 @@
 CONFIG = {
     "INPUT_PATH": "export.json",
     "TOPICS_PATH": "topic-tree.json",
-    "OUTPUT_PATH": "export.AIannotated.json",
+    "OUTPUT_PATH": "",
     "RESUME": False,
     "LIMIT": 0,
     "CHECKPOINT_EVERY": 10,
@@ -17,6 +17,7 @@ CONFIG = {
     "APPLY_CHANGE_MIN_CONF_B": 0.80,
     "LOW_CONF_MAINTENANCE_THRESHOLD": 0.65,
     "CLEANUP_SPEC_PATH": "",
+    "IMAGES_ZIP_PATH": "images.zip",
     "KNOWLEDGE_ZIP_PATH": "",
     "KNOWLEDGE_INDEX_PATH": "",
     "KNOWLEDGE_SUBJECT_HINT": "",

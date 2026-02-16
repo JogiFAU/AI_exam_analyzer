@@ -4,6 +4,7 @@ import argparse
 import os
 
 from ai_exam_analyzer.config import CONFIG
+from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.io_utils import load_json
 from ai_exam_analyzer.knowledge_base import (
     build_knowledge_base_from_zip,
@@ -54,6 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--cleanup-spec", default=CONFIG["CLEANUP_SPEC_PATH"],
                     help="Optional JSON whitelist spec to keep only selected fields in output")
 
+    ap.add_argument("--images-zip", default=CONFIG["IMAGES_ZIP_PATH"],
+                    help="Optional ZIP with question images (default: images.zip)")
+
     ap.add_argument("--knowledge-zip", default=CONFIG["KNOWLEDGE_ZIP_PATH"],
                     help="Optional ZIP with PDFs/TXT/MD files used as retrieval knowledge base")
     ap.add_argument("--knowledge-index", default=CONFIG["KNOWLEDGE_INDEX_PATH"],
@@ -76,8 +80,23 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _derive_output_path(input_path: str, requested_output: str) -> str:
+    requested_output = (requested_output or "").strip()
+    if requested_output:
+        return requested_output
+
+    input_path = (input_path or "").strip()
+    input_dir = os.path.dirname(input_path)
+    input_name = os.path.basename(input_path)
+    stem, _ = os.path.splitext(input_name)
+    stem = stem or "export"
+    output_name = f"{stem} AIannotated.json"
+    return os.path.join(input_dir, output_name) if input_dir else output_name
+
+
 def main() -> None:
     args = build_parser().parse_args()
+    args.output = _derive_output_path(args.input, args.output)
 
     if not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY environment variable is not set.")
@@ -111,6 +130,13 @@ def main() -> None:
         if isinstance(super_topics, list) and super_topics:
             subject_hint = (super_topics[0].get("name") or "").strip()
 
+    image_store = None
+    if args.images_zip:
+        if os.path.exists(args.images_zip):
+            image_store = QuestionImageStore.from_zip(args.images_zip)
+        elif args.images_zip != CONFIG["IMAGES_ZIP_PATH"]:
+            raise FileNotFoundError(f"--images-zip file not found: {args.images_zip}")
+
     knowledge_base = None
     if args.knowledge_index:
         index_path = args.knowledge_index
@@ -142,6 +168,7 @@ def main() -> None:
         schema_b=schema_b,
         cleanup_spec=cleanup_spec,
         knowledge_base=knowledge_base,
+        image_store=image_store,
     )
 
 

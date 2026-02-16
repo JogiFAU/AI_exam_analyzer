@@ -24,6 +24,7 @@ Die Pipeline arbeitet jetzt explizit in mehreren Schritten, passend zum gewünsc
 3. **Unabhängige Verifikation** in Pass B (`verify_answer`) bei Triggern wie niedriger Confidence oder Wartungsverdacht.
 4. **Finale Themenzuordnung** (`topic_final`) nach Abschluss der inhaltlichen Prüfung.
 5. **Finale Entscheidung + Flags** im Output:
+   - `topicInitial.reasonDetailed`, `topicFinal.reasonDetailed` und ausführliche Begründungen in der Antwortprüfung
    - `answerPlausibility.finalCorrectIndices`
    - `answerPlausibility.finalAnswerConfidence` (0..1)
    - `answerPlausibility.aiDisagreesWithDataset` (AI-Antwort weicht vom Datensatz ab)
@@ -42,9 +43,10 @@ Der Grenzwert ist per CLI konfigurierbar:
 export OPENAI_API_KEY="..."
 python classify_topics_merged_config_fixed.py \
   --input export.json \
-  --topics topic-tree.json \
-  --output export.AIannotated.json
+  --topics topic-tree.json
 ```
+
+Wenn `--output` nicht gesetzt ist, wird automatisch `<Input-Dateiname> AIannotated.json` im selben Ordner erzeugt.
 
 ## Lokale Benutzeroberfläche (UI)
 
@@ -75,6 +77,7 @@ und übergibt nur relevante Evidenz pro Frage an Pass A/Pass B.
 3. Pro Frage werden die relevantesten Chunks gesucht.
 4. Nur diese Chunks (`retrievedEvidence`) gehen in den Prompt.
 5. Audit enthält Evidenz + Retrieval-Qualität.
+   - Im Output werden Evidenzen kompakt als Quelle (PDF/Datei), Seite und Score gespeichert (ohne langen Chunk-Text).
 
 Hinweis: Bilder in PDFs werden ohne OCR nicht in Text umgewandelt. Für bildlastige Folien sollte OCR vorgeschaltet werden.
 
@@ -105,6 +108,26 @@ Falls kein Gold-Set möglich ist, nutze ein konservatives Betriebsmodell:
 - Datensatzänderungen nur wenn Pass B zustimmt und die kombinierte Confidence hoch ist.
 - Niedrige kombinierte Confidence automatisch als Wartungsfall markieren.
 - Fälle mit AI/Datensatz-Abweichung priorisiert manuell prüfen.
+
+## Fragebilder aus ZIP einbinden (images.zip)
+
+Wenn Fragen bildbasiert sind, können die Bilder direkt mit an das Modell übergeben werden.
+Standardmäßig nutzt die CLI `images.zip` (falls im Arbeitsverzeichnis vorhanden).
+
+- Dateinamen werden anhand des Musters `img_<frage-id>_<nr>.<ext>` der Frage zugeordnet.
+- Zusätzlich werden bestehende `imageFiles`-Referenzen aus dem Datensatz ausgewertet.
+- Bild-Metadaten landen pro Frage unter `aiAudit.images` (`providedImageCount`, `missingExpectedImageRefs`, …).
+- Fehlen erwartete Bilder, wird dies im Prompt explizit markiert, damit das Modell die Frage auf Wartungsbedarf setzen kann.
+
+### Beispielaufruf mit Bildern
+
+```bash
+python classify_topics_merged_config_fixed.py \
+  --input export.json \
+  --topics topic-tree.json \
+  --output export.AIannotated.json \
+  --images-zip images.zip
+```
 
 ## Optional: Clean-up des Output-Datensatzes
 

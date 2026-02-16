@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 import streamlit as st
 
 from ai_exam_analyzer.config import CONFIG
+from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.io_utils import load_json
 from ai_exam_analyzer.knowledge_base import (
     build_knowledge_base_from_zip,
@@ -29,6 +30,16 @@ def _resolve_path(*, folder: str, filename: str) -> str:
     if folder:
         return os.path.join(folder, filename)
     return filename
+
+
+def _derive_output_path_from_input(input_path: str) -> str:
+    input_path = (input_path or "").strip()
+    input_dir = os.path.dirname(input_path)
+    input_name = os.path.basename(input_path)
+    stem, _ = os.path.splitext(input_name)
+    stem = stem or "export"
+    output_name = f"{stem} AIannotated.json"
+    return os.path.join(input_dir, output_name) if input_dir else output_name
 
 
 def _get_default_documents_dir() -> str:
@@ -88,10 +99,10 @@ def _infer_subject_hint_from_topic_tree(topics_path: str) -> str:
     return ""
 
 
-def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir: str, help_text: str, optional: bool = False) -> str:
+def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir: str, help_text: str, optional: bool = False, require_existing: bool = True) -> str:
     widget_key = f"{state_key}_input"
     last_default_key = f"{state_key}_last_default"
-    default_candidate = default_path if os.path.exists(default_path) else ""
+    default_candidate = default_path if (default_path and (os.path.exists(default_path) or (not require_existing))) else ""
 
     if state_key not in st.session_state:
         st.session_state[state_key] = default_candidate
@@ -146,8 +157,9 @@ def _build_args() -> SimpleNamespace:
 
     input_default_name = os.path.basename(CONFIG["INPUT_PATH"]) or "export.json"
     topics_default_name = os.path.basename(CONFIG["TOPICS_PATH"]) or "topic-tree.json"
-    output_default_name = os.path.basename(CONFIG["OUTPUT_PATH"]) or "export.AIannotated.json"
+    output_default_name = os.path.basename(CONFIG["OUTPUT_PATH"]) or ""
     cleanup_default_name = os.path.basename(CONFIG["CLEANUP_SPEC_PATH"]) or "whitelist.json"
+    images_zip_default_name = os.path.basename(CONFIG["IMAGES_ZIP_PATH"]) or "images.zip"
     knowledge_zip_default_name = os.path.basename(CONFIG["KNOWLEDGE_ZIP_PATH"]) or "knowledge.zip"
     knowledge_index_default_name = os.path.basename(CONFIG["KNOWLEDGE_INDEX_PATH"]) or "knowledge.index.json"
 
@@ -178,11 +190,13 @@ def _build_args() -> SimpleNamespace:
                 else:
                     st.warning("Ordner-Dialog konnte nicht geöffnet werden (z. B. kein GUI-Support).")
 
+            output_status_name = output_default_name or os.path.basename(_derive_output_path_from_input(_resolve_path(folder=data_folder, filename=input_default_name)))
             defaults = [
                 ("Input", input_default_name),
                 ("Topic-Tree", topics_default_name),
-                ("Output", output_default_name),
+                ("Output", output_status_name),
                 ("Whitelist", cleanup_default_name),
+                ("Bilder ZIP", images_zip_default_name),
                 ("Knowledge ZIP", knowledge_zip_default_name),
             ]
             st.caption("Status im Datenordner (Standarddateien):")
@@ -205,12 +219,19 @@ def _build_args() -> SimpleNamespace:
                 start_dir=data_folder,
                 help_text="Topic-Struktur-Datei (z. B. topic-tree.json).",
             )
+            derived_output_path = _derive_output_path_from_input(input_path)
+            if output_default_name:
+                output_default_path = _resolve_path(folder=output_folder, filename=output_default_name)
+            else:
+                output_default_path = derived_output_path
+
             output_path = _file_picker_row(
                 state_key="output_file",
                 label="Output JSON",
-                default_path=_resolve_path(folder=output_folder, filename=output_default_name),
+                default_path=output_default_path,
                 start_dir=output_folder,
-                help_text="Zieldatei für annotierte Ausgabe.",
+                help_text="Zieldatei für annotierte Ausgabe (wird automatisch erstellt).",
+                require_existing=False,
             )
 
             use_cleanup_spec = st.checkbox(
@@ -226,6 +247,20 @@ def _build_args() -> SimpleNamespace:
                 help_text="Optionale whitelist.json bzw. Cleanup-Spec.",
                 optional=True,
             ) if use_cleanup_spec else ""
+
+            use_images_zip = st.checkbox(
+                "Fragenbilder ZIP nutzen",
+                value=bool(CONFIG["IMAGES_ZIP_PATH"]),
+                help="Wenn aktiv, werden Fragebilder aus einer ZIP geladen und dem Modell mitgegeben.",
+            )
+            images_zip = _file_picker_row(
+                state_key="images_zip_file",
+                label="Fragenbilder ZIP",
+                default_path=_resolve_path(folder=data_folder, filename=images_zip_default_name),
+                start_dir=data_folder,
+                help_text="ZIP mit Fragebildern (Dateinamen enthalten die Frage-ID).",
+                optional=True,
+            ) if use_images_zip else ""
 
             use_knowledge_zip = st.checkbox(
                 "Knowledge ZIP nutzen",
@@ -395,7 +430,7 @@ def _build_args() -> SimpleNamespace:
     return SimpleNamespace(
         input=input_path,
         topics=topics_path,
-        output=output_path,
+        output=(output_path or _derive_output_path_from_input(input_path)),
         api_key=api_key,
         resume=resume,
         limit=int(limit),
@@ -412,6 +447,7 @@ def _build_args() -> SimpleNamespace:
         write_top_level=write_top_level,
         debug=debug,
         cleanup_spec=cleanup_spec.strip(),
+        images_zip=images_zip.strip(),
         knowledge_zip=knowledge_zip.strip(),
         knowledge_index=knowledge_index.strip(),
         knowledge_subject_hint=knowledge_subject_hint.strip(),
@@ -420,6 +456,14 @@ def _build_args() -> SimpleNamespace:
         knowledge_min_score=float(knowledge_min_score),
         knowledge_chunk_chars=int(knowledge_chunk_chars),
     )
+
+
+def _prepare_image_store(args: SimpleNamespace) -> Optional[QuestionImageStore]:
+    if not args.images_zip:
+        return None
+    if not os.path.exists(args.images_zip):
+        raise FileNotFoundError(f"Fragenbilder-ZIP nicht gefunden: {args.images_zip}")
+    return QuestionImageStore.from_zip(args.images_zip)
 
 
 def _prepare_knowledge_base(args: SimpleNamespace, topic_tree: Any) -> Optional[Any]:
@@ -496,6 +540,7 @@ def main() -> None:
             raise ValueError("Input muss Liste oder Objekt mit 'questions' sein.")
 
         cleanup_spec = load_json(args.cleanup_spec) if args.cleanup_spec else None
+        image_store = _prepare_image_store(args)
         knowledge_base = _prepare_knowledge_base(args, topic_tree)
 
         recent_events = []
@@ -528,6 +573,7 @@ def main() -> None:
             schema_b=schema_b,
             cleanup_spec=cleanup_spec,
             knowledge_base=knowledge_base,
+            image_store=image_store,
             progress_callback=on_progress,
         )
 

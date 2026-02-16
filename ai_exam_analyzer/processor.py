@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 from ai_exam_analyzer.cleanup import cleanup_dataset
 from ai_exam_analyzer.config import PIPELINE_VERSION
 from ai_exam_analyzer.io_utils import save_json
+from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.knowledge_base import KnowledgeBase, build_query_text
 from ai_exam_analyzer.passes import run_pass_a, run_pass_b, should_run_pass_b
 from ai_exam_analyzer.payload import build_question_payload
@@ -35,6 +36,18 @@ def _compose_confidence(*, answer_conf: float, topic_conf: float, retrieval_qual
     return max(0.0, min(1.0, round(score, 4)))
 
 
+def _compact_evidence(evidence_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    compact: List[Dict[str, Any]] = []
+    for row in evidence_chunks:
+        compact.append({
+            "chunkId": row.get("chunkId"),
+            "source": row.get("source"),
+            "page": row.get("page"),
+            "score": row.get("score"),
+        })
+    return compact
+
+
 def apply_correct_indices(q: Dict[str, Any], new_indices: List[int]) -> None:
     """Update correctIndices + answers[].isCorrect + correctAnswers."""
     answers = q.get("answers") or []
@@ -62,6 +75,7 @@ def process_questions(
     schema_b: Dict[str, Any],
     cleanup_spec: Optional[Dict[str, Any]] = None,
     knowledge_base: Optional[KnowledgeBase] = None,
+    image_store: Optional[QuestionImageStore] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> None:
     try:
@@ -110,6 +124,12 @@ def process_questions(
 
         payload = build_question_payload(q)
 
+        question_images: List[Dict[str, Any]] = []
+        image_context: Dict[str, Any] = {"imageZipConfigured": bool(image_store is not None)}
+        if image_store is not None:
+            question_images, image_context = image_store.prepare_question_images(q)
+        payload["imageContext"] = image_context
+
         evidence_chunks: List[Dict[str, Any]] = []
         retrieval_quality = 0.0
         if knowledge_base is not None:
@@ -134,6 +154,7 @@ def process_questions(
                 "retrievalQuality": retrieval_quality,
                 "evidenceCount": len(evidence_chunks),
             },
+            "images": image_context,
         }
 
         try:
@@ -153,6 +174,7 @@ def process_questions(
                 schema=schema_a,
                 model=args.passA_model,
                 temperature=args.passA_temperature,
+                question_images=question_images,
             )
 
             proposed = normalize_indices(pass_a["answer_review"]["proposedCorrectIndices"], n_answers)
@@ -160,6 +182,7 @@ def process_questions(
             final_topic_key = pass_a["topic_final"]["topicKey"]
             final_topic_conf = float(pass_a["topic_final"]["confidence"])
             final_topic_reason = pass_a["topic_final"]["reasonShort"]
+            final_topic_reason_detailed = pass_a["topic_final"]["reasonDetailed"]
             final_topic_source = "passA"
 
             maintenance = pass_a["maintenance"]
@@ -201,6 +224,7 @@ def process_questions(
                         schema=schema_b,
                         model=args.passB_model,
                         reasoning_effort=args.passB_reasoning_effort,
+                        question_images=question_images,
                     )
                     audit["models"]["passB"] = args.passB_model
 
@@ -215,6 +239,7 @@ def process_questions(
                     final_topic_key = pass_b["topic_final"]["topicKey"]
                     final_topic_conf = float(pass_b["topic_final"]["confidence"])
                     final_topic_reason = pass_b["topic_final"]["reasonShort"]
+                    final_topic_reason_detailed = pass_b["topic_final"]["reasonDetailed"]
                     final_topic_source = "passB"
 
                     v = pass_b["verify_answer"]
@@ -245,6 +270,8 @@ def process_questions(
                         "cannotJudge": cannot,
                         "agreeWithChange": agree,
                         "confidence": conf_b,
+                        "reasonShort": v.get("reasonShort", ""),
+                        "reasonDetailed": v.get("reasonDetailed", ""),
                         "verifiedCorrectIndices": verified,
                         "evidenceChunkIds": v.get("evidenceChunkIds", []),
                         "appliedChange": will_change,
@@ -286,6 +313,7 @@ def process_questions(
 
             init_row = key_map[pass_a["topic_initial"]["topicKey"]]
             final_row = key_map[final_topic_key]
+            compact_evidence = _compact_evidence(evidence_chunks)
 
             audit.update({
                 "status": "completed",
@@ -294,12 +322,14 @@ def process_questions(
                     "subtopic": init_row["subtopicName"],
                     "confidence": float(pass_a["topic_initial"]["confidence"]),
                     "reasonShort": pass_a["topic_initial"]["reasonShort"],
+                    "reasonDetailed": pass_a["topic_initial"]["reasonDetailed"],
                 },
                 "topicFinal": {
                     "superTopic": final_row["superTopicName"],
                     "subtopic": final_row["subtopicName"],
                     "confidence": final_topic_conf,
                     "reasonShort": final_topic_reason,
+                    "reasonDetailed": final_topic_reason_detailed,
                     "source": final_topic_source,
                 },
                 "answerPlausibility": {
@@ -310,6 +340,7 @@ def process_questions(
                         "recommendChange": recommend_a,
                         "proposedCorrectIndices": proposed,
                         "reasonShort": pass_a["answer_review"]["reasonShort"],
+                        "reasonDetailed": pass_a["answer_review"]["reasonDetailed"],
                         "evidenceChunkIds": pass_a["answer_review"].get("evidenceChunkIds", []),
                     },
                     "finalCorrectIndices": final_correct_indices,
@@ -318,7 +349,7 @@ def process_questions(
                     "finalCombinedConfidence": final_combined_confidence,
                     "retrievalQuality": retrieval_quality,
                     "evidenceCount": len(evidence_chunks),
-                    "evidence": evidence_chunks,
+                    "evidence": compact_evidence,
                     "aiDisagreesWithDataset": ai_disagrees_with_dataset,
                     "changedInDataset": bool(will_change),
                     "changeSource": change_source,
