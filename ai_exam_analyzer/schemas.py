@@ -30,6 +30,7 @@ def schema_pass_a(topic_keys: List[str]) -> Dict[str, Any]:
                     },
                     "reasonShort": {"type": "string"},
                     "maintenanceSuspicion": {"type": "array", "items": {"type": "string"}},
+                    "evidenceChunkIds": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": [
                     "isPlausible",
@@ -38,6 +39,7 @@ def schema_pass_a(topic_keys: List[str]) -> Dict[str, Any]:
                     "proposedCorrectIndices",
                     "reasonShort",
                     "maintenanceSuspicion",
+                    "evidenceChunkIds",
                 ],
                 "additionalProperties": False,
             },
@@ -83,8 +85,9 @@ def schema_pass_b(topic_keys: List[str]) -> Dict[str, Any]:
                     "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
                     "reasonShort": {"type": "string"},
                     "cannotJudge": {"type": "boolean"},
+                    "evidenceChunkIds": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["agreeWithChange", "verifiedCorrectIndices", "confidence", "reasonShort", "cannotJudge"],
+                "required": ["agreeWithChange", "verifiedCorrectIndices", "confidence", "reasonShort", "cannotJudge", "evidenceChunkIds"],
                 "additionalProperties": False,
             },
             "maintenance": {
