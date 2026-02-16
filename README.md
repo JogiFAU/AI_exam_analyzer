@@ -46,6 +46,49 @@ python classify_topics_merged_config_fixed.py \
   --output export.AIannotated.json
 ```
 
+## Wissensbasis aus ZIP (PDF/TXT/MD) nutzen
+
+Für höhere Qualität kann ein Fach-Korpus (z. B. ZIP mit Vorlesungsfolien) direkt angebunden werden.
+Die Pipeline extrahiert Text-Chunks, reduziert die Datenmenge per Retrieval (Top-K + Zeichenlimit)
+und übergibt nur relevante Evidenz pro Frage an Pass A/Pass B.
+
+### Ablauf
+1. ZIP wird gelesen (PDF/TXT/MD unterstützt).
+2. Inhalte werden in Chunks zerlegt und tokenbasiert indiziert.
+3. Pro Frage werden die relevantesten Chunks gesucht.
+4. Nur diese Chunks (`retrievedEvidence`) gehen in den Prompt.
+5. Audit enthält Evidenz + Retrieval-Qualität.
+
+Hinweis: Bilder in PDFs werden ohne OCR nicht in Text umgewandelt. Für bildlastige Folien sollte OCR vorgeschaltet werden.
+
+### Beispielaufruf
+
+```bash
+python classify_topics_merged_config_fixed.py \
+  --input export.json \
+  --topics topic-tree.json \
+  --output export.AIannotated.json \
+  --knowledge-zip fach_materialien.zip \
+  --knowledge-index fach_materialien.index.json \
+  --knowledge-top-k 6 \
+  --knowledge-max-chars 4000 \
+  --knowledge-min-score 0.06
+```
+
+### Wichtige Optionen
+- `--knowledge-zip`: ZIP-Datei mit Fachmaterialien.
+- `--knowledge-index`: optionaler Cache der extrahierten Chunks (schneller bei Wiederholungsruns).
+- `--knowledge-top-k`: Anzahl Chunks pro Frage.
+- `--knowledge-max-chars`: harte Obergrenze für mitgeschickte Evidenz pro Frage.
+- `--knowledge-min-score`: minimale Relevanzschwelle.
+- `--knowledge-chunk-chars`: Chunk-Größe beim Parsing.
+
+### Ohne Gold-Set trotzdem robust arbeiten
+Falls kein Gold-Set möglich ist, nutze ein konservatives Betriebsmodell:
+- Datensatzänderungen nur wenn Pass B zustimmt und die kombinierte Confidence hoch ist.
+- Niedrige kombinierte Confidence automatisch als Wartungsfall markieren.
+- Fälle mit AI/Datensatz-Abweichung priorisiert manuell prüfen.
+
 ## Optional: Clean-up des Output-Datensatzes
 
 Mit `--cleanup-spec <datei.json>` kann der Output nach der Verarbeitung auf definierte Felder reduziert werden.
