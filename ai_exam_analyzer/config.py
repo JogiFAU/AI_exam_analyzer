@@ -8,7 +8,7 @@ CONFIG = {
     "LIMIT": 0,
     "CHECKPOINT_EVERY": 10,
     "SLEEP": 0.15,
-    "PASSA_MODEL": "gpt-4o-mini",
+    "PASSA_MODEL": "gpt-4.1-mini",
     "PASSB_MODEL": "o4-mini",
     "PASSA_TEMPERATURE": 0.0,
     "PASSB_REASONING_EFFORT": "high",
@@ -27,6 +27,11 @@ CONFIG = {
     "KNOWLEDGE_CHUNK_CHARS": 1200,
     "WRITE_TOP_LEVEL": True,
     "DEBUG": False,
+    "TEXT_CLUSTER_SIMILARITY": 0.32,
+    "ABSTRACTION_CLUSTER_SIMILARITY": 0.45,
+    "ENABLE_REVIEW_PASS": False,
+    "REVIEW_MODEL": "o4-mini",
+    "REVIEW_MIN_MAINTENANCE_SEVERITY": 2,
 }
 
-PIPELINE_VERSION = "2pass-merged-v3-rag"
+PIPELINE_VERSION = "2pass-merged-v5-robust"

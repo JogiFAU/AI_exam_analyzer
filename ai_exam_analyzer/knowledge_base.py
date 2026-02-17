@@ -6,7 +6,9 @@ import json
 import math
 import re
 import zipfile
+from collections import Counter
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -20,11 +22,28 @@ class Chunk:
     page: int
     text: str
     tokens: set[str]
+    term_freq: Dict[str, int]
+    length: int
+
+
+@dataclass
+class KnowledgeImage:
+    image_id: str
+    source: str
+    page: int
+    perceptual_hash: str
 
 
 class KnowledgeBase:
-    def __init__(self, chunks: List[Chunk]):
+    def __init__(self, chunks: List[Chunk], images: Optional[List[KnowledgeImage]] = None):
         self.chunks = chunks
+        self.images = images or []
+        self._doc_count = max(1, len(chunks))
+        self._avg_len = sum(c.length for c in chunks) / max(1, len(chunks))
+        self._doc_freq: Dict[str, int] = {}
+        for chunk in chunks:
+            for t in chunk.tokens:
+                self._doc_freq[t] = self._doc_freq.get(t, 0) + 1
 
     def retrieve(
         self,
@@ -34,26 +53,55 @@ class KnowledgeBase:
         min_score: float,
         max_chars: int,
     ) -> Tuple[List[Dict[str, Any]], float]:
-        q_tokens = _tokenize(query_text)
-        if not q_tokens:
+        q_terms = _tokenize_list(query_text)
+        if not q_terms:
             return [], 0.0
 
+        q_unique = set(q_terms)
         scored: List[Tuple[float, Chunk]] = []
+
+        # BM25-style ranking (better than plain overlap for short exam questions)
+        k1 = 1.4
+        b = 0.72
         for chunk in self.chunks:
-            overlap = len(q_tokens & chunk.tokens)
-            if overlap == 0:
+            overlap = q_unique & chunk.tokens
+            if not overlap:
                 continue
-            score = overlap / math.sqrt(len(q_tokens) * max(1, len(chunk.tokens)))
+            score = 0.0
+            for term in overlap:
+                tf = chunk.term_freq.get(term, 0)
+                if tf <= 0:
+                    continue
+                df = self._doc_freq.get(term, 0)
+                idf = math.log(((self._doc_count - df + 0.5) / (df + 0.5)) + 1.0)
+                denom = tf + (k1 * (1.0 - b + (b * chunk.length / max(1e-6, self._avg_len))))
+                score += idf * ((tf * (k1 + 1.0)) / max(1e-6, denom))
             if score >= min_score:
                 scored.append((score, chunk))
+
+        if not scored:
+            return [], 0.0
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
         selected: List[Dict[str, Any]] = []
         used_chars = 0
         total_score = 0.0
+        selected_sources: set[str] = set()
 
-        for score, chunk in scored[: max(1, top_k * 3)]:
+        # diversity-aware greedy pick: avoid only one source dominating all evidence
+        candidates = scored[: max(1, top_k * 6)]
+        while candidates and len(selected) < top_k:
+            best_idx = 0
+            best_value = -1e9
+            for i, (score, chunk) in enumerate(candidates):
+                diversity_bonus = 0.12 if chunk.source not in selected_sources else 0.0
+                value = score + diversity_bonus
+                if value > best_value:
+                    best_value = value
+                    best_idx = i
+
+            score, chunk = candidates.pop(best_idx)
             snippet = chunk.text.strip()
             if not snippet:
                 continue
@@ -75,15 +123,43 @@ class KnowledgeBase:
             )
             used_chars += len(snippet)
             total_score += score
-            if len(selected) >= top_k:
-                break
+            selected_sources.add(chunk.source)
 
-        retrieval_quality = round(total_score / max(1, len(selected)), 4) if selected else 0.0
+        if not selected:
+            return [], 0.0
+
+        mean_score = total_score / len(selected)
+        retrieval_quality = round(1.0 - math.exp(-0.35 * mean_score), 4)
         return selected, retrieval_quality
+
+    def find_similar_images(self, perceptual_hash: str, *, max_hamming_distance: int) -> List[Dict[str, Any]]:
+        hits: List[Tuple[int, KnowledgeImage]] = []
+        for img in self.images:
+            dist = _hamming_distance_hex(perceptual_hash, img.perceptual_hash)
+            if dist <= max_hamming_distance:
+                hits.append((dist, img))
+        hits.sort(key=lambda row: row[0])
+        return [
+            {
+                "imageId": img.image_id,
+                "source": img.source,
+                "page": img.page,
+                "hammingDistance": dist,
+            }
+            for dist, img in hits[:8]
+        ]
 
 
 def _tokenize(text: str) -> set[str]:
     return {m.group(0).lower() for m in _TOKEN_RE.finditer(text or "")}
+
+
+def _tokenize_list(text: str) -> List[str]:
+    return [m.group(0).lower() for m in _TOKEN_RE.finditer(text or "")]
+
+
+def _term_freq(text: str) -> Dict[str, int]:
+    return dict(Counter(_tokenize_list(text)))
 
 
 def _chunk_text(text: str, *, max_chars: int) -> List[str]:
@@ -95,7 +171,6 @@ def _chunk_text(text: str, *, max_chars: int) -> List[str]:
     buf = ""
     for part in paragraphs:
         if len(part) > max_chars:
-            # hard split for very long paragraph
             for i in range(0, len(part), max_chars):
                 segment = part[i : i + max_chars].strip()
                 if segment:
@@ -127,8 +202,6 @@ def _extract_pdf_chunks_from_bytes(raw_pdf: bytes, source_name: str, max_chunk_c
             "Knowledge ZIP contains PDFs, but dependency `pypdf` is missing. Install with: pip install pypdf"
         ) from exc
 
-    from io import BytesIO
-
     reader = PdfReader(BytesIO(raw_pdf))
     result: List[Chunk] = []
 
@@ -142,8 +215,46 @@ def _extract_pdf_chunks_from_bytes(raw_pdf: bytes, source_name: str, max_chunk_c
             tokens = _tokenize(chunk_text)
             if not tokens:
                 continue
-            result.append(Chunk(chunk_id=chunk_id, source=source_name, page=p_idx, text=chunk_text, tokens=tokens))
+            term_freq = _term_freq(chunk_text)
+            result.append(
+                Chunk(
+                    chunk_id=chunk_id,
+                    source=source_name,
+                    page=p_idx,
+                    text=chunk_text,
+                    tokens=tokens,
+                    term_freq=term_freq,
+                    length=max(1, sum(term_freq.values())),
+                )
+            )
 
+    return result
+
+
+def _extract_pdf_images_from_bytes(raw_pdf: bytes, source_name: str) -> List[KnowledgeImage]:
+    try:
+        from pypdf import PdfReader  # type: ignore
+    except ModuleNotFoundError:
+        return []
+
+    reader = PdfReader(BytesIO(raw_pdf))
+    result: List[KnowledgeImage] = []
+    for p_idx, page in enumerate(reader.pages, start=1):
+        images = getattr(page, "images", None)
+        if not images:
+            continue
+        for i, image in enumerate(images, start=1):
+            raw = getattr(image, "data", b"")
+            if not raw:
+                continue
+            result.append(
+                KnowledgeImage(
+                    image_id=f"{source_name}#p{p_idx}i{i}",
+                    source=source_name,
+                    page=p_idx,
+                    perceptual_hash=_compute_perceptual_hash(raw),
+                )
+            )
     return result
 
 
@@ -159,6 +270,7 @@ def build_knowledge_base_from_zip(
 
     subject_tokens = _tokenize(subject_hint or "")
     chunks: List[Chunk] = []
+    images: List[KnowledgeImage] = []
 
     with zipfile.ZipFile(zpath, "r") as zf:
         for info in zf.infolist():
@@ -173,25 +285,37 @@ def build_knowledge_base_from_zip(
             if subject_tokens:
                 name_tokens = _tokenize(name)
                 if subject_tokens.isdisjoint(name_tokens):
-                    # keep file, but with lower priority by allowing all; do not skip hard
                     pass
 
             raw = zf.read(info)
 
             if lower.endswith(".pdf"):
                 chunks.extend(_extract_pdf_chunks_from_bytes(raw, basename, max_chunk_chars))
+                images.extend(_extract_pdf_images_from_bytes(raw, basename))
             else:
                 text = raw.decode("utf-8", errors="ignore")
                 for i, chunk_text in enumerate(_chunk_text(text, max_chars=max_chunk_chars), start=1):
                     chunk_id = f"{basename}#t{i}"
                     tokens = _tokenize(chunk_text)
-                    if tokens:
-                        chunks.append(Chunk(chunk_id=chunk_id, source=basename, page=0, text=chunk_text, tokens=tokens))
+                    if not tokens:
+                        continue
+                    term_freq = _term_freq(chunk_text)
+                    chunks.append(
+                        Chunk(
+                            chunk_id=chunk_id,
+                            source=basename,
+                            page=0,
+                            text=chunk_text,
+                            tokens=tokens,
+                            term_freq=term_freq,
+                            length=max(1, sum(term_freq.values())),
+                        )
+                    )
 
     if not chunks:
         raise RuntimeError("No extractable knowledge chunks found in ZIP (supported: PDF/TXT/MD).")
 
-    return KnowledgeBase(chunks)
+    return KnowledgeBase(chunks, images=images)
 
 
 def save_index_json(path: str, kb: KnowledgeBase) -> None:
@@ -202,26 +326,55 @@ def save_index_json(path: str, kb: KnowledgeBase) -> None:
             "page": c.page,
             "text": c.text,
             "tokens": sorted(c.tokens),
+            "termFreq": c.term_freq,
+            "length": c.length,
         }
         for c in kb.chunks
     ]
-    Path(path).write_text(json.dumps(serializable, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = {
+        "chunks": serializable,
+        "images": [
+            {
+                "imageId": img.image_id,
+                "source": img.source,
+                "page": img.page,
+                "perceptualHash": img.perceptual_hash,
+            }
+            for img in kb.images
+        ],
+    }
+    Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_index_json(path: str) -> KnowledgeBase:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, list):
+        data = {"chunks": data, "images": []}
     chunks: List[Chunk] = []
-    for row in data:
+    for row in data.get("chunks", []):
+        text = row.get("text", "")
+        term_freq = row.get("termFreq") or _term_freq(text)
         chunks.append(
             Chunk(
                 chunk_id=row["chunkId"],
                 source=row.get("source", "unknown"),
                 page=int(row.get("page", 0)),
-                text=row.get("text", ""),
-                tokens=set(row.get("tokens") or _tokenize(row.get("text", ""))),
+                text=text,
+                tokens=set(row.get("tokens") or _tokenize(text)),
+                term_freq={str(k): int(v) for k, v in term_freq.items()},
+                length=int(row.get("length") or max(1, sum(int(v) for v in term_freq.values()))),
             )
         )
-    return KnowledgeBase(chunks)
+    images = [
+        KnowledgeImage(
+            image_id=row.get("imageId", ""),
+            source=row.get("source", "unknown"),
+            page=int(row.get("page", 0)),
+            perceptual_hash=row.get("perceptualHash", "0" * 16),
+        )
+        for row in data.get("images", [])
+    ]
+    return KnowledgeBase(chunks, images=images)
 
 
 def build_query_text(payload: Dict[str, Any]) -> str:
@@ -229,3 +382,29 @@ def build_query_text(payload: Dict[str, Any]) -> str:
     for a in payload.get("answers", []):
         parts.append(a.get("text", ""))
     return "\n".join(x for x in parts if x)
+
+
+def _compute_perceptual_hash(raw: bytes) -> str:
+    try:
+        from PIL import Image  # type: ignore
+    except ModuleNotFoundError:
+        return raw[:8].hex().ljust(16, "0")
+    try:
+        with Image.open(BytesIO(raw)) as img:
+            img = img.convert("L").resize((9, 8))
+            px = list(img.getdata())
+    except Exception:
+        return raw[:8].hex().ljust(16, "0")
+
+    bits = []
+    for y in range(8):
+        for x in range(8):
+            bits.append("1" if px[y * 9 + x] > px[y * 9 + x + 1] else "0")
+    return f"{int(''.join(bits), 2):016x}"
+
+
+def _hamming_distance_hex(a: str, b: str) -> int:
+    try:
+        return (int(a, 16) ^ int(b, 16)).bit_count()
+    except Exception:
+        return 64

@@ -12,7 +12,7 @@ from ai_exam_analyzer.knowledge_base import (
     save_index_json,
 )
 from ai_exam_analyzer.processor import process_questions
-from ai_exam_analyzer.schemas import schema_pass_a, schema_pass_b
+from ai_exam_analyzer.schemas import schema_pass_a, schema_pass_b, schema_review_pass
 from ai_exam_analyzer.topic_catalog import build_topic_catalog, format_topic_catalog_for_prompt
 
 
@@ -73,6 +73,20 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--knowledge-chunk-chars", type=int, default=CONFIG["KNOWLEDGE_CHUNK_CHARS"],
                     help="Chunk size when parsing files from knowledge ZIP")
 
+    ap.add_argument("--text-cluster-similarity", type=float, default=CONFIG["TEXT_CLUSTER_SIMILARITY"],
+                    help="Jaccard threshold for question-content clustering")
+    ap.add_argument("--abstraction-cluster-similarity", type=float, default=CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"],
+                    help="Jaccard threshold for abstraction clustering")
+
+    ap.add_argument("--enable-review-pass", dest="enable_review_pass", action="store_true",
+                    default=CONFIG["ENABLE_REVIEW_PASS"],
+                    help="Enable optional deep review pass for maintenance-heavy questions")
+    ap.add_argument("--no-enable-review-pass", dest="enable_review_pass", action="store_false",
+                    help="Disable optional deep review pass")
+    ap.add_argument("--review-model", default=CONFIG["REVIEW_MODEL"])
+    ap.add_argument("--review-min-maintenance-severity", type=int, default=CONFIG["REVIEW_MIN_MAINTENANCE_SEVERITY"],
+                    help="Run review pass only for maintenance severity >= this value")
+
     ap.add_argument("--debug", dest="debug", action="store_true", default=CONFIG["DEBUG"],
                     help="Store raw pass outputs under aiAudit._debug")
     ap.add_argument("--no-debug", dest="debug", action="store_false",
@@ -108,6 +122,7 @@ def main() -> None:
 
     schema_a = schema_pass_a(topic_keys)
     schema_b = schema_pass_b(topic_keys)
+    schema_review = schema_review_pass(topic_keys)
 
     data = load_json(args.input)
 
@@ -166,6 +181,7 @@ def main() -> None:
         topic_catalog_text=topic_catalog_text,
         schema_a=schema_a,
         schema_b=schema_b,
+        schema_review=schema_review,
         cleanup_spec=cleanup_spec,
         knowledge_base=knowledge_base,
         image_store=image_store,

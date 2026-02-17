@@ -15,7 +15,7 @@ from ai_exam_analyzer.knowledge_base import (
     save_index_json,
 )
 from ai_exam_analyzer.processor import process_questions
-from ai_exam_analyzer.schemas import schema_pass_a, schema_pass_b
+from ai_exam_analyzer.schemas import schema_pass_a, schema_pass_b, schema_review_pass
 from ai_exam_analyzer.topic_catalog import build_topic_catalog, format_topic_catalog_for_prompt
 
 
@@ -381,6 +381,42 @@ def _build_args() -> SimpleNamespace:
                 help="Unterhalb dieses Werts wird die Frage als Wartungsfall markiert.",
             )
 
+            text_cluster_similarity = st.slider(
+                "Question-Cluster Similarity",
+                0.0,
+                1.0,
+                float(CONFIG["TEXT_CLUSTER_SIMILARITY"]),
+                0.01,
+                help="Ähnlichkeitsschwelle für inhaltliche Frage-Cluster (Jaccard).",
+            )
+            abstraction_cluster_similarity = st.slider(
+                "Abstraction-Cluster Similarity",
+                0.0,
+                1.0,
+                float(CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"]),
+                0.01,
+                help="Ähnlichkeitsschwelle für Cluster der Frageabstraktionen.",
+            )
+
+            enable_review_pass = st.checkbox(
+                "Pass C (Deep Review) aktivieren",
+                value=bool(CONFIG["ENABLE_REVIEW_PASS"]),
+                help="Optionaler dritter Review-Pass für wartungsintensive Fragen.",
+            )
+            review_model = st.text_input(
+                "Pass C Modell",
+                value=CONFIG["REVIEW_MODEL"],
+                help="Modell für den optionalen Deep-Review-Pass.",
+                disabled=not enable_review_pass,
+            )
+            review_min_maintenance_severity = st.select_slider(
+                "Pass C ab Wartungs-Severity",
+                options=[1, 2, 3],
+                value=int(CONFIG["REVIEW_MIN_MAINTENANCE_SEVERITY"]),
+                help="Pass C läuft nur ab diesem Wartungs-Schweregrad.",
+                disabled=not enable_review_pass,
+            )
+
             write_top_level = st.checkbox(
                 "Top-Level ai* Felder schreiben",
                 value=CONFIG["WRITE_TOP_LEVEL"],
@@ -455,6 +491,11 @@ def _build_args() -> SimpleNamespace:
         knowledge_max_chars=int(knowledge_max_chars),
         knowledge_min_score=float(knowledge_min_score),
         knowledge_chunk_chars=int(knowledge_chunk_chars),
+        text_cluster_similarity=float(text_cluster_similarity),
+        abstraction_cluster_similarity=float(abstraction_cluster_similarity),
+        enable_review_pass=bool(enable_review_pass),
+        review_model=review_model.strip(),
+        review_min_maintenance_severity=int(review_min_maintenance_severity),
     )
 
 
@@ -528,6 +569,7 @@ def main() -> None:
 
         schema_a = schema_pass_a(topic_keys)
         schema_b = schema_pass_b(topic_keys)
+        schema_review = schema_review_pass(topic_keys)
 
         data = load_json(args.input)
         if isinstance(data, dict) and "questions" in data:
@@ -571,6 +613,7 @@ def main() -> None:
             topic_catalog_text=topic_catalog_text,
             schema_a=schema_a,
             schema_b=schema_b,
+            schema_review=schema_review,
             cleanup_spec=cleanup_spec,
             knowledge_base=knowledge_base,
             image_store=image_store,

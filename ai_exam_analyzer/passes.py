@@ -1,4 +1,4 @@
-"""Pass A and Pass B runner functions."""
+"""Pass runner functions."""
 
 import json
 from typing import Any, Dict, List
@@ -19,21 +19,21 @@ def run_pass_a(
     system = (
         "Du bist ein strenger Prüfungsfragen-Analyst und Klassifikator.\n"
         "Arbeitsablauf:\n"
-        "1) Ordne die Frage zunächst NUR anhand von Fragetext + Antwortoptionen einem Topic (topicKey) zu.\n"
-        "2) Versuche die Frage nach deinem Wissen zu beantworten. Mehrere Antworten können eventuell richtig sein. \n"
-        "3) Vergleiche deine Antwort(en) mit der/den aktuell markierte(n) richtige(n) Antwort(en). Sollte(n) deine Antwort(en) sich unterscheiden, prüfe welche Inhaltlich plausibel sind.\n"
-        "   - Wenn eindeutig falsch, schlage korrigierte CorrectIndices vor.\n"
-        "   - Bei Unsicherheit: recommendChange=false und confidence niedrig.\n"
-        "3) Markiere Wartungsbedarf (unklar, mehrdeutig, widersprüchlich, Bild nötig, etc.).\n"
-        "   - Falls imageContext.questionHasImageReference=true, müssen bereitgestellte Bilder in die fachliche Bewertung einfließen.\n"
-        "   - Falls ein Bild erwartet wird, aber imageContext.providedImageCount=0 oder missingExpectedImageRefs nicht leer ist, setze needsMaintenance=true und nenne den Grund.\n"
-        "4) Ordne nach der inhaltlichen Analyse das Topic ggf. neu zu.\n\n"
+        "1) Nutze questionClusterContext und bilde initial topic_initial NUR aus Fragetext + Antwortoptionen.\n"
+        "2) Nutze imageContext, imageClusterContext und knowledgeImageContext für die Bildzuordnung.\n"
+        "   - Wenn Bild vorhanden ist: bewerte visuelle Hinweise zwingend mit.\n"
+        "   - Falls knowledgeImageContext ähnliche Knowledge-Base-Bilder enthält, nutze deren Kontext aktiv.\n"
+        "3) Beantworte die Frage fachlich mit retrievedEvidence + Bildkontext.\n"
+        "   - Wenn retrievedEvidence leer oder schwach ist, setze confidence konservativ und markiere Wartungsbedarf.\n"
+        "4) Vergleiche mit currentCorrectIndices und entscheide über recommendChange/proposedCorrectIndices.\n"
+        "5) Markiere Wartungsbedarf (unklar, mehrdeutig, fehlendes Bild, etc.).\n"
+        "6) Bestimme topic_final und gib eine Ein-Satz-Abstraktion question_abstraction.summary aus.\n\n"
         "Regeln:\n"
-        "- Nutze, falls vorhanden, das Feld retrievedEvidence als Fachkontext.\n"
-        "- evidenceChunkIds muss die genutzten Chunk-IDs aus retrievedEvidence enthalten (oder []).\n"
-        "- Antworte ausschließlich im vorgegebenen JSON-Schema.\n"
-        "- reasonShort ist sehr kurz; reasonDetailed ist eine ausführliche, nachvollziehbare Begründung.\n"
-        "- proposedCorrectIndices sind 0-basiert.\n\n"
+        "- evidenceChunkIds muss genutzte Chunk-IDs aus retrievedEvidence referenzieren (oder []).\n"
+        "- Nutze nur Evidenz, die fachlich direkt zur Frage passt; vermeide spekulative Schlüsse.\n"
+        "- proposedCorrectIndices sind 0-basiert.\n"
+        "- Wenn Bild erwartet wird, aber fehlt: needsMaintenance=true.\n"
+        "- Antworte ausschließlich im vorgegebenen JSON-Schema.\n\n"
         f"{topic_catalog_text}"
     )
     user = [{"type": "input_text", "text": json.dumps(payload, ensure_ascii=False)}] + question_images
@@ -45,7 +45,7 @@ def run_pass_a(
         schema=schema,
         format_name="pass_a_audit",
         temperature=temperature,
-        max_output_tokens=1100,
+        max_output_tokens=1200,
     )
 
 
@@ -62,22 +62,12 @@ def run_pass_b(
 ) -> Dict[str, Any]:
     system = (
         "Du bist ein unabhängiger Verifier.\n"
-        "Du bekommst eine Prüfungsfrage + einen Vorschlag (Pass A).\n"
-        "Aufgaben:\n"
-        "A) Prüfe, ob die in Pass A empfohlene Änderung der CorrectIndices fachlich korrekt ist.\n"
-        "   - agreeWithChange=true nur wenn du die Änderung klar unterstützt.\n"
-        "   - cannotJudge=true wenn Bild/Infos fehlen oder die Frage unentscheidbar ist.\n"
-        "   - Berücksichtige question.imageContext und alle mitgelieferten Bilder zwingend.\n"
-        "   - Wenn ein Bild erwartet wird, aber question.imageContext.providedImageCount=0 oder missingExpectedImageRefs nicht leer ist, markiere Wartungsbedarf.\n"
-        "   - Liefere verifiedCorrectIndices (0-basiert). Wenn cannotJudge=true, gib [] aus.\n"
-        "B) Markiere Wartungsbedarf.\n"
-        "C) Gib deinen eigenen finalen TopicKey nach deiner Analyse aus.\n\n"
-        "Regeln:\n"
-        "- Nutze, falls vorhanden, das Feld question.retrievedEvidence als Fachkontext.\n"
-        "- evidenceChunkIds muss die genutzten Chunk-IDs aus question.retrievedEvidence enthalten (oder []).\n"
-        "- Sei konservativ: bei Zweifel keine Änderung bestätigen.\n"
-        "- Antworte ausschließlich im vorgegebenen JSON-Schema.\n"
-        "- reasonShort ist sehr kurz; reasonDetailed ist eine ausführliche, nachvollziehbare Begründung.\n\n"
+        "Du bekommst eine Prüfungsfrage + Pass A Ergebnis.\n"
+        "Prüfe mit retrievedEvidence + Bildkontext + Clusterkontext, ob die vorgeschlagene Korrektur fachlich stimmt.\n"
+        "Bei schwacher/fehlender Evidenz: konservativ bleiben und cannotJudge erwägen.\n"
+        "Berücksichtige Bildähnlichkeits-Hinweise aus knowledgeImageContext zwingend.\n"
+        "Wenn Bild fehlt oder Fall unentscheidbar: cannotJudge=true und Wartungsbedarf markieren.\n"
+        "Antworte ausschließlich im JSON-Schema.\n\n"
         f"{topic_catalog_text}"
     )
     packed = {"question": payload, "passA": pass_a}
@@ -91,6 +81,36 @@ def run_pass_b(
         format_name="pass_b_verify",
         temperature=None,
         reasoning_effort=reasoning_effort,
+        max_output_tokens=1000,
+    )
+
+
+def run_review_pass(
+    client: Any,
+    *,
+    payload: Dict[str, Any],
+    current_audit: Dict[str, Any],
+    schema: Dict[str, Any],
+    model: str,
+    question_images: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    system = (
+        "Du bist ein sehr strenger Senior-Reviewer für wartungsbedürftige Fragen.\n"
+        "Nutze den gesamten Kontext (Frage, Wissen, Bildcluster, Knowledge-Bildtreffer, Audit-Historie).\n"
+        "Korrigiere ggf. finalCorrectIndices/finalTopicKey und gib reviewComment.\n"
+        "Setze recommendManualReview=true, wenn Unsicherheit oder Datenprobleme bestehen.\n"
+        "Antworte nur im JSON-Schema."
+    )
+    packed = {"question": payload, "currentAudit": current_audit}
+    user = [{"type": "input_text", "text": json.dumps(packed, ensure_ascii=False)}] + question_images
+    return call_json_schema(
+        client,
+        model=model,
+        system=system,
+        user=user,
+        schema=schema,
+        format_name="pass_c_review",
+        temperature=0.0,
         max_output_tokens=900,
     )
 
