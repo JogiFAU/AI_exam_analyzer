@@ -7,6 +7,7 @@ import math
 import re
 import zipfile
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -22,9 +23,18 @@ class Chunk:
     tokens: set[str]
 
 
+@dataclass
+class KnowledgeImage:
+    image_id: str
+    source: str
+    page: int
+    perceptual_hash: str
+
+
 class KnowledgeBase:
-    def __init__(self, chunks: List[Chunk]):
+    def __init__(self, chunks: List[Chunk], images: Optional[List[KnowledgeImage]] = None):
         self.chunks = chunks
+        self.images = images or []
 
     def retrieve(
         self,
@@ -80,6 +90,23 @@ class KnowledgeBase:
 
         retrieval_quality = round(total_score / max(1, len(selected)), 4) if selected else 0.0
         return selected, retrieval_quality
+
+    def find_similar_images(self, perceptual_hash: str, *, max_hamming_distance: int) -> List[Dict[str, Any]]:
+        hits: List[Tuple[int, KnowledgeImage]] = []
+        for img in self.images:
+            dist = _hamming_distance_hex(perceptual_hash, img.perceptual_hash)
+            if dist <= max_hamming_distance:
+                hits.append((dist, img))
+        hits.sort(key=lambda row: row[0])
+        return [
+            {
+                "imageId": img.image_id,
+                "source": img.source,
+                "page": img.page,
+                "hammingDistance": dist,
+            }
+            for dist, img in hits[:8]
+        ]
 
 
 def _tokenize(text: str) -> set[str]:
@@ -147,6 +174,31 @@ def _extract_pdf_chunks_from_bytes(raw_pdf: bytes, source_name: str, max_chunk_c
     return result
 
 
+def _extract_pdf_images_from_bytes(raw_pdf: bytes, source_name: str) -> List[KnowledgeImage]:
+    try:
+        from pypdf import PdfReader  # type: ignore
+    except ModuleNotFoundError:
+        return []
+
+    reader = PdfReader(BytesIO(raw_pdf))
+    result: List[KnowledgeImage] = []
+    for p_idx, page in enumerate(reader.pages, start=1):
+        images = getattr(page, "images", None)
+        if not images:
+            continue
+        for i, image in enumerate(images, start=1):
+            raw = getattr(image, "data", b"")
+            if not raw:
+                continue
+            result.append(KnowledgeImage(
+                image_id=f"{source_name}#p{p_idx}i{i}",
+                source=source_name,
+                page=p_idx,
+                perceptual_hash=_compute_perceptual_hash(raw),
+            ))
+    return result
+
+
 def build_knowledge_base_from_zip(
     zip_path: str,
     *,
@@ -159,6 +211,7 @@ def build_knowledge_base_from_zip(
 
     subject_tokens = _tokenize(subject_hint or "")
     chunks: List[Chunk] = []
+    images: List[KnowledgeImage] = []
 
     with zipfile.ZipFile(zpath, "r") as zf:
         for info in zf.infolist():
@@ -180,6 +233,7 @@ def build_knowledge_base_from_zip(
 
             if lower.endswith(".pdf"):
                 chunks.extend(_extract_pdf_chunks_from_bytes(raw, basename, max_chunk_chars))
+                images.extend(_extract_pdf_images_from_bytes(raw, basename))
             else:
                 text = raw.decode("utf-8", errors="ignore")
                 for i, chunk_text in enumerate(_chunk_text(text, max_chars=max_chunk_chars), start=1):
@@ -191,7 +245,7 @@ def build_knowledge_base_from_zip(
     if not chunks:
         raise RuntimeError("No extractable knowledge chunks found in ZIP (supported: PDF/TXT/MD).")
 
-    return KnowledgeBase(chunks)
+    return KnowledgeBase(chunks, images=images)
 
 
 def save_index_json(path: str, kb: KnowledgeBase) -> None:
@@ -205,13 +259,27 @@ def save_index_json(path: str, kb: KnowledgeBase) -> None:
         }
         for c in kb.chunks
     ]
-    Path(path).write_text(json.dumps(serializable, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = {
+        "chunks": serializable,
+        "images": [
+            {
+                "imageId": img.image_id,
+                "source": img.source,
+                "page": img.page,
+                "perceptualHash": img.perceptual_hash,
+            }
+            for img in kb.images
+        ],
+    }
+    Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_index_json(path: str) -> KnowledgeBase:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(data, list):
+        data = {"chunks": data, "images": []}
     chunks: List[Chunk] = []
-    for row in data:
+    for row in data.get("chunks", []):
         chunks.append(
             Chunk(
                 chunk_id=row["chunkId"],
@@ -221,7 +289,16 @@ def load_index_json(path: str) -> KnowledgeBase:
                 tokens=set(row.get("tokens") or _tokenize(row.get("text", ""))),
             )
         )
-    return KnowledgeBase(chunks)
+    images = [
+        KnowledgeImage(
+            image_id=row.get("imageId", ""),
+            source=row.get("source", "unknown"),
+            page=int(row.get("page", 0)),
+            perceptual_hash=row.get("perceptualHash", "0" * 16),
+        )
+        for row in data.get("images", [])
+    ]
+    return KnowledgeBase(chunks, images=images)
 
 
 def build_query_text(payload: Dict[str, Any]) -> str:
@@ -229,3 +306,29 @@ def build_query_text(payload: Dict[str, Any]) -> str:
     for a in payload.get("answers", []):
         parts.append(a.get("text", ""))
     return "\n".join(x for x in parts if x)
+
+
+def _compute_perceptual_hash(raw: bytes) -> str:
+    try:
+        from PIL import Image  # type: ignore
+    except ModuleNotFoundError:
+        return raw[:8].hex().ljust(16, "0")
+    try:
+        with Image.open(BytesIO(raw)) as img:
+            img = img.convert("L").resize((9, 8))
+            px = list(img.getdata())
+    except Exception:
+        return raw[:8].hex().ljust(16, "0")
+
+    bits = []
+    for y in range(8):
+        for x in range(8):
+            bits.append("1" if px[y * 9 + x] > px[y * 9 + x + 1] else "0")
+    return f"{int(''.join(bits), 2):016x}"
+
+
+def _hamming_distance_hex(a: str, b: str) -> int:
+    try:
+        return (int(a, 16) ^ int(b, 16)).bit_count()
+    except Exception:
+        return 64

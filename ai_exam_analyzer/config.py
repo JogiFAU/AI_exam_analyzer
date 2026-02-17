@@ -27,6 +27,11 @@ CONFIG = {
     "KNOWLEDGE_CHUNK_CHARS": 1200,
     "WRITE_TOP_LEVEL": True,
     "DEBUG": False,
+    "TEXT_CLUSTER_SIMILARITY": 0.32,
+    "ABSTRACTION_CLUSTER_SIMILARITY": 0.45,
+    "ENABLE_REVIEW_PASS": False,
+    "REVIEW_MODEL": "o4-mini",
+    "REVIEW_MIN_MAINTENANCE_SEVERITY": 2,
 }
 
-PIPELINE_VERSION = "2pass-merged-v3-rag"
+PIPELINE_VERSION = "2pass-merged-v4-clustered-images"

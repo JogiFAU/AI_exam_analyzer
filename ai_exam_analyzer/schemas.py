@@ -1,4 +1,4 @@
-"""Structured output schemas for both analysis passes."""
+"""Structured output schemas for analysis passes."""
 
 from typing import Any, Dict, List
 
@@ -67,8 +67,16 @@ def schema_pass_a(topic_keys: List[str]) -> Dict[str, Any]:
                 "required": ["topicKey", "confidence", "reasonShort", "reasonDetailed"],
                 "additionalProperties": False,
             },
+            "question_abstraction": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                },
+                "required": ["summary"],
+                "additionalProperties": False,
+            },
         },
-        "required": ["topic_initial", "answer_review", "maintenance", "topic_final"],
+        "required": ["topic_initial", "answer_review", "maintenance", "topic_final", "question_abstraction"],
         "additionalProperties": False,
     }
 
@@ -118,5 +126,20 @@ def schema_pass_b(topic_keys: List[str]) -> Dict[str, Any]:
             },
         },
         "required": ["verify_answer", "maintenance", "topic_final"],
+        "additionalProperties": False,
+    }
+
+
+def schema_review_pass(topic_keys: List[str]) -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "finalCorrectIndices": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+            "finalTopicKey": {"type": "string", "enum": topic_keys},
+            "reviewComment": {"type": "string"},
+            "recommendManualReview": {"type": "boolean"},
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+        },
+        "required": ["finalCorrectIndices", "finalTopicKey", "reviewComment", "recommendManualReview", "confidence"],
         "additionalProperties": False,
     }

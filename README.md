@@ -19,11 +19,15 @@ Dieses Projekt prüft Fragen-/Antwort-Daten über die OpenAI API inhaltlich und 
 
 Die Pipeline arbeitet jetzt explizit in mehreren Schritten, passend zum gewünschten Ablauf:
 
-1. **Vorläufige Themenerkennung** (`topic_initial`) nur aus Frage + Antwortoptionen.
-2. **Inhaltliche Antwortprüfung** (`answer_review`) inkl. Plausibilitätsbewertung und Änderungsvorschlag.
-3. **Unabhängige Verifikation** in Pass B (`verify_answer`) bei Triggern wie niedriger Confidence oder Wartungsverdacht.
-4. **Finale Themenzuordnung** (`topic_final`) nach Abschluss der inhaltlichen Prüfung.
-5. **Finale Entscheidung + Flags** im Output:
+1. **Datensatz-Clusterung nach Frageinhalt** (Fragetext + Antworten) vor der Modellanalyse.
+2. **Bild-Clusterung** für Fragenbilder inkl. Ähnlichkeitsabgleich zu Bildern aus PDF-Dateien der Knowledge-Base.
+3. **Vorläufige Themenerkennung** (`topic_initial`) nur aus Frage + Antwortoptionen.
+4. **Inhaltliche Antwortprüfung** (`answer_review`) inkl. Plausibilitätsbewertung und Änderungsvorschlag unter Nutzung von Cluster-/Bildkontext.
+5. **Unabhängige Verifikation** in Pass B (`verify_answer`) bei Triggern wie niedriger Confidence oder Wartungsverdacht.
+6. **Finale Themenzuordnung** (`topic_final`) + **Frageabstraktion** (`question_abstraction.summary`).
+7. **Abstraktions-Clusterung** nach Abschluss der Fragenanalyse.
+8. **Optionaler Review-Pass** für schwierige Wartungsfälle mit separatem Modell.
+9. **Finale Entscheidung + Flags** im Output:
    - `topicInitial.reasonDetailed`, `topicFinal.reasonDetailed` und ausführliche Begründungen in der Antwortprüfung
    - `answerPlausibility.finalCorrectIndices`
    - `answerPlausibility.finalAnswerConfidence` (0..1)
@@ -248,3 +252,14 @@ Wenn du möchtest, kann ich im nächsten Schritt direkt eine konkrete **Datenstr
 ## Hinweise zu potenziellen Problemen (ohne Funktionsänderung)
 
 Siehe `KNOWN_ISSUES.md`.
+
+
+### Neue optionale Workflow-Parameter
+
+```bash
+--text-cluster-similarity 0.32 \
+--abstraction-cluster-similarity 0.45 \
+--enable-review-pass \
+--review-model o4-mini \
+--review-min-maintenance-severity 2
+```

@@ -8,8 +8,9 @@ from ai_exam_analyzer.config import PIPELINE_VERSION
 from ai_exam_analyzer.io_utils import save_json
 from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.knowledge_base import KnowledgeBase, build_query_text
-from ai_exam_analyzer.passes import run_pass_a, run_pass_b, should_run_pass_b
+from ai_exam_analyzer.passes import run_pass_a, run_pass_b, run_review_pass, should_run_pass_b
 from ai_exam_analyzer.payload import build_question_payload
+from ai_exam_analyzer.workflow_context import build_dataset_context, cluster_abstractions
 
 
 def normalize_indices(indices: List[int], n_answers: int) -> List[int]:
@@ -73,6 +74,7 @@ def process_questions(
     topic_catalog_text: str,
     schema_a: Dict[str, Any],
     schema_b: Dict[str, Any],
+    schema_review: Dict[str, Any],
     cleanup_spec: Optional[Dict[str, Any]] = None,
     knowledge_base: Optional[KnowledgeBase] = None,
     image_store: Optional[QuestionImageStore] = None,
@@ -104,6 +106,14 @@ def process_questions(
         message="Analyse gestartet.",
     )
 
+    dataset_context = build_dataset_context(
+        questions,
+        image_store=image_store,
+        knowledge_base=knowledge_base,
+        text_similarity_threshold=float(args.text_cluster_similarity),
+        abstraction_similarity_threshold=float(args.abstraction_cluster_similarity),
+    )
+
     for i, q in enumerate(questions, start=1):
         if args.limit and processed >= args.limit:
             break
@@ -129,6 +139,16 @@ def process_questions(
         if image_store is not None:
             question_images, image_context = image_store.prepare_question_images(q)
         payload["imageContext"] = image_context
+        qid = str(q.get("id") or "")
+        payload["questionClusterContext"] = {
+            "clusterId": dataset_context.text_clusters["questionToCluster"].get(qid),
+            "clusterMembers": dataset_context.text_clusters["clusterMembers"].get(str(dataset_context.text_clusters["questionToCluster"].get(qid)), []),
+        }
+        payload["imageClusterContext"] = {
+            "clusterIds": ((dataset_context.image_clusters.get("questionImageClusters") or {}).get("questionToClusters") or {}).get(qid, []),
+            "clusters": (dataset_context.image_clusters.get("questionImageClusters") or {}).get("clusters", []),
+        }
+        payload["knowledgeImageContext"] = (dataset_context.image_clusters.get("knowledgeImageMatches") or {}).get(qid, [])
 
         evidence_chunks: List[Dict[str, Any]] = []
         retrieval_quality = 0.0
@@ -148,13 +168,17 @@ def process_questions(
         audit: Dict[str, Any] = {
             "pipelineVersion": PIPELINE_VERSION,
             "status": "error",
-            "models": {"passA": args.passA_model, "passB": None},
+            "models": {"passA": args.passA_model, "passB": None, "review": None},
             "knowledge": {
                 "enabled": bool(knowledge_base is not None),
                 "retrievalQuality": retrieval_quality,
                 "evidenceCount": len(evidence_chunks),
             },
             "images": image_context,
+            "clusters": {
+                "questionContentClusterId": payload["questionClusterContext"].get("clusterId"),
+                "questionImageClusterIds": payload["imageClusterContext"].get("clusterIds", []),
+            },
         }
 
         try:
@@ -356,7 +380,42 @@ def process_questions(
                     "verification": verification,
                 },
                 "maintenance": maintenance,
+                "questionAbstraction": {
+                    "summary": (pass_a.get("question_abstraction") or {}).get("summary", ""),
+                },
             })
+
+            if (
+                args.enable_review_pass
+                and bool(audit.get("maintenance", {}).get("needsMaintenance"))
+                and int(audit.get("maintenance", {}).get("severity", 1)) >= int(args.review_min_maintenance_severity)
+            ):
+                try:
+                    review = run_review_pass(
+                        client,
+                        payload=payload,
+                        current_audit=audit,
+                        schema=schema_review,
+                        model=args.review_model,
+                        question_images=question_images,
+                    )
+                    audit["models"]["review"] = args.review_model
+                    review_indices = normalize_indices(review.get("finalCorrectIndices", []), n_answers)
+                    if review_indices and review_indices != (q.get("correctIndices") or []):
+                        apply_correct_indices(q, review_indices)
+                        audit["answerPlausibility"]["finalCorrectIndices"] = review_indices
+                    topic_key_review = review.get("finalTopicKey")
+                    if topic_key_review in key_map:
+                        topic_row_review = key_map[topic_key_review]
+                        audit["topicFinal"]["superTopic"] = topic_row_review["superTopicName"]
+                        audit["topicFinal"]["subtopic"] = topic_row_review["subtopicName"]
+                    audit["reviewPass"] = review
+                    if review.get("recommendManualReview"):
+                        audit["maintenance"]["needsMaintenance"] = True
+                        audit["maintenance"]["reasons"] = list(dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["review_pass_manual_review"]))
+                except Exception as review_exc:
+                    audit["models"]["review"] = args.review_model
+                    audit["reviewPass"] = {"error": str(review_exc)}
 
             if args.debug:
                 audit["_debug"] = {"passA_raw": pass_a, "passB_raw": pass_b}
@@ -404,6 +463,18 @@ def process_questions(
             )
 
         time.sleep(args.sleep)
+
+    abstraction_clusters = cluster_abstractions(
+        questions,
+        threshold=float(args.abstraction_cluster_similarity),
+    )
+    for q in questions:
+        qid = str(q.get("id") or "")
+        audit = q.get("aiAudit")
+        if not isinstance(audit, dict):
+            continue
+        audit.setdefault("clusters", {})
+        audit["clusters"]["abstractionClusterId"] = abstraction_clusters["questionToAbstractionCluster"].get(qid)
 
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
