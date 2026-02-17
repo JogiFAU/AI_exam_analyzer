@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 
 def _tokenize(text: str) -> Set[str]:
@@ -32,17 +32,38 @@ class _UnionFind:
             self.parent[rb] = ra
 
 
+def _candidate_pairs(items: List[Set[str]]) -> Set[Tuple[int, int]]:
+    inverted: Dict[str, List[int]] = defaultdict(list)
+    for idx, toks in enumerate(items):
+        for t in toks:
+            inverted[t].append(idx)
+
+    pairs: Set[Tuple[int, int]] = set()
+    for token_items in inverted.values():
+        if len(token_items) <= 1:
+            continue
+        for i in range(len(token_items)):
+            left = token_items[i]
+            for j in range(i + 1, len(token_items)):
+                right = token_items[j]
+                if left < right:
+                    pairs.add((left, right))
+                else:
+                    pairs.add((right, left))
+    return pairs
+
+
 def _cluster_by_similarity(items: List[Set[str]], threshold: float) -> List[int]:
     n = len(items)
     uf = _UnionFind(n)
-    for i in range(n):
-        for j in range(i + 1, n):
-            left, right = items[i], items[j]
-            if not left or not right:
-                continue
-            sim = len(left & right) / max(1, len(left | right))
-            if sim >= threshold:
-                uf.union(i, j)
+
+    for i, j in _candidate_pairs(items):
+        left, right = items[i], items[j]
+        if not left or not right:
+            continue
+        sim = len(left & right) / max(1, len(left | right))
+        if sim >= threshold:
+            uf.union(i, j)
 
     root_to_cluster: Dict[int, int] = {}
     cluster_ids: List[int] = []
@@ -68,7 +89,6 @@ def build_dataset_context(
     image_store: Optional[Any],
     knowledge_base: Optional[Any],
     text_similarity_threshold: float,
-    abstraction_similarity_threshold: float,
 ) -> DatasetContext:
     text_sets: List[Set[str]] = []
     for q in questions:
@@ -103,7 +123,6 @@ def build_dataset_context(
         text_clusters={
             "questionToCluster": question_text_cluster,
             "clusterMembers": {str(k): v for k, v in cluster_to_question_ids.items()},
-            "abstractionSimilarityThreshold": abstraction_similarity_threshold,
         },
         image_clusters=image_cluster_payload,
     )

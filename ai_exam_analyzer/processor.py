@@ -11,6 +11,7 @@ from ai_exam_analyzer.knowledge_base import KnowledgeBase, build_query_text
 from ai_exam_analyzer.passes import run_pass_a, run_pass_b, run_review_pass, should_run_pass_b
 from ai_exam_analyzer.payload import build_question_payload
 from ai_exam_analyzer.workflow_context import build_dataset_context, cluster_abstractions
+from ai_exam_analyzer.decision_policy import compose_confidence, should_apply_pass_b_change, should_run_review_pass
 
 
 def normalize_indices(indices: List[int], n_answers: int) -> List[int]:
@@ -29,12 +30,6 @@ def _build_output_obj(
     return out_obj
 
 
-
-
-def _compose_confidence(*, answer_conf: float, topic_conf: float, retrieval_quality: float, verifier_agreed: Optional[bool]) -> float:
-    agreement = 1.0 if verifier_agreed is True else (0.5 if verifier_agreed is None else 0.25)
-    score = (0.4 * answer_conf) + (0.25 * topic_conf) + (0.2 * retrieval_quality) + (0.15 * agreement)
-    return max(0.0, min(1.0, round(score, 4)))
 
 
 def _compact_evidence(evidence_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -111,7 +106,6 @@ def process_questions(
         image_store=image_store,
         knowledge_base=knowledge_base,
         text_similarity_threshold=float(args.text_cluster_similarity),
-        abstraction_similarity_threshold=float(args.abstraction_cluster_similarity),
     )
 
     for i, q in enumerate(questions, start=1):
@@ -144,9 +138,11 @@ def process_questions(
             "clusterId": dataset_context.text_clusters["questionToCluster"].get(qid),
             "clusterMembers": dataset_context.text_clusters["clusterMembers"].get(str(dataset_context.text_clusters["questionToCluster"].get(qid)), []),
         }
+        question_image_clusters = ((dataset_context.image_clusters.get("questionImageClusters") or {}).get("questionToClusters") or {}).get(qid, [])
+        all_image_clusters = (dataset_context.image_clusters.get("questionImageClusters") or {}).get("clusters", [])
         payload["imageClusterContext"] = {
-            "clusterIds": ((dataset_context.image_clusters.get("questionImageClusters") or {}).get("questionToClusters") or {}).get(qid, []),
-            "clusters": (dataset_context.image_clusters.get("questionImageClusters") or {}).get("clusters", []),
+            "clusterIds": question_image_clusters,
+            "clusters": [c for c in all_image_clusters if c.get("clusterId") in set(question_image_clusters)],
         }
         payload["knowledgeImageContext"] = (dataset_context.image_clusters.get("knowledgeImageMatches") or {}).get(qid, [])
 
@@ -280,7 +276,16 @@ def process_questions(
 
                     verifier_agreed = agree and (not cannot)
 
-                    if (not cannot) and agree and (conf_b >= args.apply_change_min_conf_b) and len(verified) > 0 and verified != current:
+                    if should_apply_pass_b_change(
+                        current_indices=current,
+                        verified_indices=verified,
+                        cannot_judge=cannot,
+                        agree_with_change=agree,
+                        confidence_b=conf_b,
+                        apply_min_conf_b=args.apply_change_min_conf_b,
+                        retrieval_quality=retrieval_quality,
+                        evidence_count=len(evidence_chunks),
+                    ):
                         apply_correct_indices(q, verified)
                         will_change = True
                         change_source = "passB"
@@ -317,11 +322,12 @@ def process_questions(
                     "reasons": merged_reasons,
                 }
 
-            final_combined_confidence = _compose_confidence(
+            final_combined_confidence = compose_confidence(
                 answer_conf=final_answer_confidence,
                 topic_conf=final_topic_conf,
                 retrieval_quality=retrieval_quality,
                 verifier_agreed=verifier_agreed,
+                evidence_count=len(evidence_chunks),
             )
 
             if (
@@ -385,10 +391,13 @@ def process_questions(
                 },
             })
 
-            if (
-                args.enable_review_pass
-                and bool(audit.get("maintenance", {}).get("needsMaintenance"))
-                and int(audit.get("maintenance", {}).get("severity", 1)) >= int(args.review_min_maintenance_severity)
+            if should_run_review_pass(
+                args=args,
+                maintenance=audit.get("maintenance", {}),
+                ai_disagrees_with_dataset=ai_disagrees_with_dataset,
+                final_combined_confidence=final_combined_confidence,
+                pass_a_topic_key=pass_a["topic_initial"]["topicKey"],
+                final_topic_key=final_topic_key,
             ):
                 try:
                     review = run_review_pass(
@@ -409,6 +418,10 @@ def process_questions(
                         topic_row_review = key_map[topic_key_review]
                         audit["topicFinal"]["superTopic"] = topic_row_review["superTopicName"]
                         audit["topicFinal"]["subtopic"] = topic_row_review["subtopicName"]
+                        audit["topicFinal"]["source"] = "review"
+                        audit["topicFinal"]["confidence"] = float(review.get("confidence", audit["topicFinal"].get("confidence", 0.0)))
+                        audit["topicFinal"]["reasonShort"] = "Pass-C review override"
+                        audit["topicFinal"]["reasonDetailed"] = review.get("reviewComment", "")
                     audit["reviewPass"] = review
                     if review.get("recommendManualReview"):
                         audit["maintenance"]["needsMaintenance"] = True

@@ -21,13 +21,14 @@ Die Pipeline arbeitet jetzt explizit in mehreren Schritten, passend zum gewünsc
 
 1. **Datensatz-Clusterung nach Frageinhalt** (Fragetext + Antworten) vor der Modellanalyse.
 2. **Bild-Clusterung** für Fragenbilder inkl. Ähnlichkeitsabgleich zu Bildern aus PDF-Dateien der Knowledge-Base.
-3. **Vorläufige Themenerkennung** (`topic_initial`) nur aus Frage + Antwortoptionen.
-4. **Inhaltliche Antwortprüfung** (`answer_review`) inkl. Plausibilitätsbewertung und Änderungsvorschlag unter Nutzung von Cluster-/Bildkontext.
-5. **Unabhängige Verifikation** in Pass B (`verify_answer`) bei Triggern wie niedriger Confidence oder Wartungsverdacht.
-6. **Finale Themenzuordnung** (`topic_final`) + **Frageabstraktion** (`question_abstraction.summary`).
-7. **Abstraktions-Clusterung** nach Abschluss der Fragenanalyse.
-8. **Optionaler Review-Pass** für schwierige Wartungsfälle mit separatem Modell.
-9. **Finale Entscheidung + Flags** im Output:
+3. **Robustes Retrieval (BM25-basiert + Diversität)** statt einfachem Token-Overlap für den Fachkontext.
+4. **Vorläufige Themenerkennung** (`topic_initial`) nur aus Frage + Antwortoptionen.
+5. **Inhaltliche Antwortprüfung** (`answer_review`) inkl. Plausibilitätsbewertung und Änderungsvorschlag unter Nutzung von Cluster-/Bildkontext.
+6. **Unabhängige Verifikation** in Pass B (`verify_answer`) bei Triggern wie niedriger Confidence oder Wartungsverdacht.
+7. **Finale Themenzuordnung** (`topic_final`) + **Frageabstraktion** (`question_abstraction.summary`).
+8. **Abstraktions-Clusterung** nach Abschluss der Fragenanalyse.
+9. **Optionaler Review-Pass** für schwierige Wartungsfälle mit separatem Modell inkl. Konflikt-Triggern.
+10. **Finale Entscheidung + Flags** im Output:
    - `topicInitial.reasonDetailed`, `topicFinal.reasonDetailed` und ausführliche Begründungen in der Antwortprüfung
    - `answerPlausibility.finalCorrectIndices`
    - `answerPlausibility.finalAnswerConfidence` (0..1)
@@ -263,3 +264,9 @@ Siehe `KNOWN_ISSUES.md`.
 --review-model o4-mini \
 --review-min-maintenance-severity 2
 ```
+
+
+**Hinweis V5:**
+- Retrieval verwendet jetzt BM25-Scoring mit Quell-Diversitätsbonus.
+- Entscheidung über Antwortänderungen ist konservativer (Evidenz-/Qualitätsgates).
+- Pass C kann zusätzlich bei Konflikten (Topic-Shift, Datensatzabweichung + geringe Gesamtconfidence) auslösen.

@@ -8,7 +8,7 @@ CONFIG = {
     "LIMIT": 0,
     "CHECKPOINT_EVERY": 10,
     "SLEEP": 0.15,
-    "PASSA_MODEL": "gpt-4o-mini",
+    "PASSA_MODEL": "gpt-4.1-mini",
     "PASSB_MODEL": "o4-mini",
     "PASSA_TEMPERATURE": 0.0,
     "PASSB_REASONING_EFFORT": "high",
@@ -34,4 +34,4 @@ CONFIG = {
     "REVIEW_MIN_MAINTENANCE_SEVERITY": 2,
 }
 
-PIPELINE_VERSION = "2pass-merged-v4-clustered-images"
+PIPELINE_VERSION = "2pass-merged-v5-robust"
