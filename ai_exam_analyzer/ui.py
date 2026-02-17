@@ -381,6 +381,42 @@ def _build_args() -> SimpleNamespace:
                 help="Unterhalb dieses Werts wird die Frage als Wartungsfall markiert.",
             )
 
+            text_cluster_similarity = st.slider(
+                "Question-Cluster Similarity",
+                0.0,
+                1.0,
+                float(CONFIG["TEXT_CLUSTER_SIMILARITY"]),
+                0.01,
+                help="Ähnlichkeitsschwelle für inhaltliche Frage-Cluster (Jaccard).",
+            )
+            abstraction_cluster_similarity = st.slider(
+                "Abstraction-Cluster Similarity",
+                0.0,
+                1.0,
+                float(CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"]),
+                0.01,
+                help="Ähnlichkeitsschwelle für Cluster der Frageabstraktionen.",
+            )
+
+            enable_review_pass = st.checkbox(
+                "Pass C (Deep Review) aktivieren",
+                value=bool(CONFIG["ENABLE_REVIEW_PASS"]),
+                help="Optionaler dritter Review-Pass für wartungsintensive Fragen.",
+            )
+            review_model = st.text_input(
+                "Pass C Modell",
+                value=CONFIG["REVIEW_MODEL"],
+                help="Modell für den optionalen Deep-Review-Pass.",
+                disabled=not enable_review_pass,
+            )
+            review_min_maintenance_severity = st.select_slider(
+                "Pass C ab Wartungs-Severity",
+                options=[1, 2, 3],
+                value=int(CONFIG["REVIEW_MIN_MAINTENANCE_SEVERITY"]),
+                help="Pass C läuft nur ab diesem Wartungs-Schweregrad.",
+                disabled=not enable_review_pass,
+            )
+
             write_top_level = st.checkbox(
                 "Top-Level ai* Felder schreiben",
                 value=CONFIG["WRITE_TOP_LEVEL"],
@@ -455,11 +491,11 @@ def _build_args() -> SimpleNamespace:
         knowledge_max_chars=int(knowledge_max_chars),
         knowledge_min_score=float(knowledge_min_score),
         knowledge_chunk_chars=int(knowledge_chunk_chars),
-        text_cluster_similarity=float(CONFIG["TEXT_CLUSTER_SIMILARITY"]),
-        abstraction_cluster_similarity=float(CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"]),
-        enable_review_pass=bool(CONFIG["ENABLE_REVIEW_PASS"]),
-        review_model=CONFIG["REVIEW_MODEL"],
-        review_min_maintenance_severity=int(CONFIG["REVIEW_MIN_MAINTENANCE_SEVERITY"]),
+        text_cluster_similarity=float(text_cluster_similarity),
+        abstraction_cluster_similarity=float(abstraction_cluster_similarity),
+        enable_review_pass=bool(enable_review_pass),
+        review_model=review_model.strip(),
+        review_min_maintenance_severity=int(review_min_maintenance_severity),
     )
 
 
