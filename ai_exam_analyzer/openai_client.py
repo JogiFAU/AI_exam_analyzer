@@ -24,6 +24,31 @@ def call_json_schema(
 ) -> Dict[str, Any]:
     """Responses API + Structured Outputs (json_schema). Handles temperature for reasoning models."""
 
+    def _extract_output_text(resp: Any) -> str:
+        text = getattr(resp, "output_text", None)
+        if isinstance(text, str) and text.strip():
+            return text
+
+        output = getattr(resp, "output", None)
+        if not isinstance(output, list):
+            raise RuntimeError("Responses API returned no parseable text output.")
+
+        parts: List[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                # pydantic-like models may expose dict conversion.
+                item = item.model_dump() if hasattr(item, "model_dump") else {}
+            for content in item.get("content", []) or []:
+                if not isinstance(content, dict):
+                    content = content.model_dump() if hasattr(content, "model_dump") else {}
+                if content.get("type") in {"output_text", "text"} and isinstance(content.get("text"), str):
+                    parts.append(content["text"])
+
+        merged = "".join(parts).strip()
+        if not merged:
+            raise RuntimeError("Responses API returned no parseable text output.")
+        return merged
+
     def _do_call(send_temperature: bool) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "model": model,
@@ -51,7 +76,7 @@ def call_json_schema(
         resp = client.responses.create(**params)
         if resp.status != "completed":
             raise RuntimeError(f"Response not completed: {resp.status}")
-        return json.loads(resp.output_text)
+        return json.loads(_extract_output_text(resp))
 
     if is_reasoning_model(model):
         return _do_call(send_temperature=False)
