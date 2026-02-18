@@ -211,6 +211,7 @@ Optional mit Bildern (für `questionImageClusterIds`):
 ```
 
 Hinweis: Das Skript ruft intern `python -m ai_exam_analyzer.recluster_only` auf und aktualisiert nur `aiAudit.clusters` (plus `meta.clusteringRerun` im Container).
+Dabei wird für **jede Frage** ein Status in der CLI ausgegeben (Start/Ende), damit Fehler und Fortschritt direkt sichtbar sind.
 
 ## Optional: Clean-up des Output-Datensatzes
 

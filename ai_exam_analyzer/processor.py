@@ -271,7 +271,7 @@ def process_questions(
     # Refresh cluster IDs in existing aiAudit payloads so clustering can be retuned
     # without rerunning the full Pass-A/Pass-B pipeline.
     question_to_image_clusters = ((dataset_context.image_clusters.get("questionImageClusters") or {}).get("questionToClusters") or {})
-    for q in questions:
+    for idx, q in enumerate(questions, start=1):
         audit = q.get("aiAudit")
         if not isinstance(audit, dict):
             continue
@@ -279,6 +279,16 @@ def process_questions(
         clusters = audit.setdefault("clusters", {})
         clusters["questionContentClusterId"] = dataset_context.text_clusters["questionToCluster"].get(qid)
         clusters["questionImageClusterIds"] = question_to_image_clusters.get(qid, [])
+        emit_progress(
+            event="content_clustering_question_updated",
+            stage="clustering",
+            index=idx,
+            total=total_questions,
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            message=f"Clustering-Update {idx}/{total_questions}: Content/Image-Cluster für Frage {qid} aktualisiert.",
+        )
     emit_progress(
         event="dataset_context_finished",
         stage="preprocessing",
@@ -955,13 +965,23 @@ def process_questions(
         questions,
         threshold=float(args.abstraction_cluster_similarity),
     )
-    for q in questions:
+    for idx, q in enumerate(questions, start=1):
         qid = str(q.get("id") or "")
         audit = q.get("aiAudit")
         if not isinstance(audit, dict):
             continue
         audit.setdefault("clusters", {})
         audit["clusters"]["abstractionClusterId"] = abstraction_clusters["questionToAbstractionCluster"].get(qid)
+        emit_progress(
+            event="abstraction_clustering_question_updated",
+            stage="clustering",
+            index=idx,
+            total=total_questions,
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            message=f"Abstraktions-Clustering {idx}/{total_questions}: Cluster für Frage {qid} aktualisiert.",
+        )
     emit_progress(
         event="abstraction_clustering_finished",
         stage="postprocessing",
@@ -1042,12 +1062,32 @@ def process_questions(
             total=total_questions,
             message="Starte Reconstruction-Pass.",
         )
-        for q in questions:
+        for idx, q in enumerate(questions, start=1):
             audit = q.get("aiAudit")
             if not isinstance(audit, dict):
+                emit_progress(
+                    event="reconstruction_question_skipped",
+                    stage="postprocessing",
+                    index=idx,
+                    total=total_questions,
+                    processed=processed,
+                    done=done,
+                    skipped=skipped,
+                    message=f"Reconstruction {idx}/{total_questions} übersprungen (kein aiAudit).",
+                )
                 continue
 
             qid = str(q.get("id") or "")
+            emit_progress(
+                event="reconstruction_question_started",
+                stage="postprocessing",
+                index=idx,
+                total=total_questions,
+                processed=processed,
+                done=done,
+                skipped=skipped,
+                message=f"Reconstruction {idx}/{total_questions} gestartet (Frage {qid}).",
+            )
             cluster_id = (((audit.get("clusters") or {}).get("abstractionClusterId")) or ((audit.get("clusters") or {}).get("questionContentClusterId")))
             related: List[Dict[str, Any]] = []
             if cluster_id is not None:
@@ -1110,6 +1150,16 @@ def process_questions(
                     audit["maintenance"]["reasons"] = list(
                         dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["reconstruction_manual_review"])
                     )
+                emit_progress(
+                    event="reconstruction_question_finished",
+                    stage="postprocessing",
+                    index=idx,
+                    total=total_questions,
+                    processed=processed,
+                    done=done,
+                    skipped=skipped,
+                    message=f"Reconstruction {idx}/{total_questions} abgeschlossen (Frage {qid}).",
+                )
             except Exception as rec_exc:
                 # retry with compact context to reduce token pressure
                 compact_context = {
@@ -1132,6 +1182,16 @@ def process_questions(
                         audit["maintenance"]["reasons"] = list(
                             dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["reconstruction_manual_review"])
                         )
+                    emit_progress(
+                        event="reconstruction_question_finished",
+                        stage="postprocessing",
+                        index=idx,
+                        total=total_questions,
+                        processed=processed,
+                        done=done,
+                        skipped=skipped,
+                        message=f"Reconstruction {idx}/{total_questions} abgeschlossen (Retry erfolgreich, Frage {qid}).",
+                    )
                 except Exception as rec_retry_exc:
                     audit["reconstruction"] = {
                         "error": str(rec_exc),
@@ -1141,6 +1201,17 @@ def process_questions(
                     audit["maintenance"]["needsMaintenance"] = True
                     audit["maintenance"]["reasons"] = list(
                         dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["reconstruction_failed_manual_review"])
+                    )
+                    emit_progress(
+                        event="reconstruction_question_error",
+                        stage="postprocessing",
+                        index=idx,
+                        total=total_questions,
+                        processed=processed,
+                        done=done,
+                        skipped=skipped,
+                        error=str(rec_retry_exc),
+                        message=f"Reconstruction {idx}/{total_questions} fehlgeschlagen (Frage {qid}): {rec_retry_exc}",
                     )
         emit_progress(
             event="reconstruction_pass_finished",
@@ -1162,10 +1233,31 @@ def process_questions(
             total=total_questions,
             message="Starte Explainer-Pass.",
         )
-        for q in questions:
+        for idx, q in enumerate(questions, start=1):
             audit = q.get("aiAudit")
             if not isinstance(audit, dict):
+                emit_progress(
+                    event="explainer_question_skipped",
+                    stage="postprocessing",
+                    index=idx,
+                    total=total_questions,
+                    processed=processed,
+                    done=done,
+                    skipped=skipped,
+                    message=f"Explainer {idx}/{total_questions} übersprungen (kein aiAudit).",
+                )
                 continue
+            qid = str(q.get("id") or "")
+            emit_progress(
+                event="explainer_question_started",
+                stage="postprocessing",
+                index=idx,
+                total=total_questions,
+                processed=processed,
+                done=done,
+                skipped=skipped,
+                message=f"Explainer {idx}/{total_questions} gestartet (Frage {qid}).",
+            )
             payload_tmp = build_question_payload(
                 q,
                 current_correct_indices=_coerce_dataset_correct_indices(q.get("correctIndices") or [], _answer_external_indices(q)),
@@ -1193,8 +1285,29 @@ def process_questions(
                     model=args.explainer_model,
                 )
                 audit["explainer"] = expl
+                emit_progress(
+                    event="explainer_question_finished",
+                    stage="postprocessing",
+                    index=idx,
+                    total=total_questions,
+                    processed=processed,
+                    done=done,
+                    skipped=skipped,
+                    message=f"Explainer {idx}/{total_questions} abgeschlossen (Frage {qid}).",
+                )
             except Exception as expl_exc:
                 audit["explainer"] = {"error": str(expl_exc)}
+                emit_progress(
+                    event="explainer_question_error",
+                    stage="postprocessing",
+                    index=idx,
+                    total=total_questions,
+                    processed=processed,
+                    done=done,
+                    skipped=skipped,
+                    error=str(expl_exc),
+                    message=f"Explainer {idx}/{total_questions} fehlgeschlagen (Frage {qid}): {expl_exc}",
+                )
         emit_progress(
             event="explainer_pass_finished",
             stage="postprocessing",
@@ -1218,13 +1331,22 @@ def process_questions(
         questions,
         threshold=float(args.abstraction_cluster_similarity),
     )
-    for q in questions:
+    for idx, q in enumerate(questions, start=1):
         qid = str(q.get("id") or "")
         audit = q.get("aiAudit")
         if not isinstance(audit, dict):
             continue
         audit.setdefault("clusters", {})
         audit["clusters"]["abstractionClusterId"] = abstraction_clusters["questionToAbstractionCluster"].get(qid)
+        emit_progress(
+            event="abstraction_clustering_question_updated",
+            stage="clustering",
+            index=idx,
+            total=total_questions,
+            done=done,
+            skipped=skipped,
+            message=f"Abstraktions-Clustering {idx}/{total_questions}: Cluster für Frage {qid} aktualisiert.",
+        )
 
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
@@ -1278,8 +1400,12 @@ def rerun_postprocessing_from_output(
 
     total_questions = len(questions)
     selected_question_ids = {str(x).strip() for x in (getattr(args, "only_question_ids", []) or []) if str(x).strip()}
-    emit_progress(event="postprocess_only_started", stage="postprocessing", total=total_questions,
-                  message="Postprocess-only Lauf gestartet (Review/Reconstruction).")
+    emit_progress(
+        event="postprocess_only_started",
+        stage="postprocessing",
+        total=total_questions,
+        message="Postprocess-only Lauf gestartet (Review/Reconstruction).",
+    )
 
     dataset_context = build_dataset_context(
         questions,
@@ -1289,7 +1415,7 @@ def rerun_postprocessing_from_output(
     )
 
     question_to_image_clusters = ((dataset_context.image_clusters.get("questionImageClusters") or {}).get("questionToClusters") or {})
-    for q in questions:
+    for idx, q in enumerate(questions, start=1):
         audit = q.get("aiAudit")
         if not isinstance(audit, dict):
             continue
@@ -1297,6 +1423,13 @@ def rerun_postprocessing_from_output(
         clusters = audit.setdefault("clusters", {})
         clusters["questionContentClusterId"] = dataset_context.text_clusters["questionToCluster"].get(qid)
         clusters["questionImageClusterIds"] = question_to_image_clusters.get(qid, [])
+        emit_progress(
+            event="content_clustering_question_updated",
+            stage="clustering",
+            index=idx,
+            total=total_questions,
+            message=f"Clustering-Update {idx}/{total_questions}: Content/Image-Cluster für Frage {qid} aktualisiert.",
+        )
 
     review_done = 0
     reconstruction_done = 0
@@ -1306,12 +1439,39 @@ def rerun_postprocessing_from_output(
         audit = q.get("aiAudit")
         if not isinstance(audit, dict):
             skipped += 1
+            emit_progress(
+                event="postprocess_question_skipped",
+                stage="postprocessing",
+                index=i,
+                total=total_questions,
+                skipped=skipped,
+                message=f"Frage {i}/{total_questions} übersprungen (kein aiAudit).",
+            )
             continue
 
         qid = str(q.get("id") or "")
         if selected_question_ids and qid not in selected_question_ids:
             skipped += 1
+            emit_progress(
+                event="postprocess_question_skipped_filter",
+                stage="postprocessing",
+                index=i,
+                total=total_questions,
+                skipped=skipped,
+                message=f"Frage {i}/{total_questions} übersprungen (ID-Filter).",
+            )
             continue
+
+        emit_progress(
+            event="postprocess_question_started",
+            stage="postprocessing",
+            index=i,
+            total=total_questions,
+            done=review_done + reconstruction_done,
+            skipped=skipped,
+            message=f"Frage {i}/{total_questions} Postprocessing gestartet (ID: {qid}).",
+        )
+
         external_indices = _answer_external_indices(q)
         current = _coerce_dataset_correct_indices(q.get("correctIndices") or [], external_indices)
         payload = build_question_payload(q, current_correct_indices=current)
@@ -1347,6 +1507,15 @@ def rerun_postprocessing_from_output(
             current_review = audit.get("reviewPass")
             should_rerun_review = bool(getattr(args, "force_rerun_review", False)) or not isinstance(current_review, dict) or ("error" in current_review)
             if should_rerun_review:
+                emit_progress(
+                    event="review_question_started",
+                    stage="postprocessing",
+                    index=i,
+                    total=total_questions,
+                    done=review_done + reconstruction_done,
+                    skipped=skipped,
+                    message=f"Review {i}/{total_questions} gestartet (Frage {qid}).",
+                )
                 try:
                     review = run_review_pass(
                         client,
@@ -1368,13 +1537,51 @@ def rerun_postprocessing_from_output(
                         audit["topicFinal"]["subtopic"] = topic_row_review["subtopicName"]
                         audit["topicFinal"]["source"] = "review"
                     review_done += 1
+                    emit_progress(
+                        event="review_question_finished",
+                        stage="postprocessing",
+                        index=i,
+                        total=total_questions,
+                        done=review_done + reconstruction_done,
+                        skipped=skipped,
+                        message=f"Review {i}/{total_questions} abgeschlossen (Frage {qid}).",
+                    )
                 except Exception as review_exc:
                     audit["reviewPass"] = {"error": str(review_exc)}
+                    emit_progress(
+                        event="review_question_error",
+                        stage="postprocessing",
+                        index=i,
+                        total=total_questions,
+                        done=review_done + reconstruction_done,
+                        skipped=skipped,
+                        error=str(review_exc),
+                        message=f"Review {i}/{total_questions} fehlgeschlagen (Frage {qid}): {review_exc}",
+                    )
+            else:
+                emit_progress(
+                    event="review_question_skipped",
+                    stage="postprocessing",
+                    index=i,
+                    total=total_questions,
+                    done=review_done + reconstruction_done,
+                    skipped=skipped,
+                    message=f"Review {i}/{total_questions} übersprungen (bereits vorhanden, Frage {qid}).",
+                )
 
         if bool(getattr(args, "enable_reconstruction_pass", True)):
             current_reconstruction = audit.get("reconstruction")
             should_rerun_reconstruction = bool(getattr(args, "force_rerun_reconstruction", False)) or not isinstance(current_reconstruction, dict) or ("error" in current_reconstruction)
             if should_rerun_reconstruction:
+                emit_progress(
+                    event="reconstruction_question_started",
+                    stage="postprocessing",
+                    index=i,
+                    total=total_questions,
+                    done=review_done + reconstruction_done,
+                    skipped=skipped,
+                    message=f"Reconstruction {i}/{total_questions} gestartet (Frage {qid}).",
+                )
                 cluster_id = (((audit.get("clusters") or {}).get("abstractionClusterId")) or ((audit.get("clusters") or {}).get("questionContentClusterId")))
                 related: List[Dict[str, Any]] = []
                 if cluster_id is not None:
@@ -1423,12 +1630,51 @@ def rerun_postprocessing_from_output(
                         maintenance["reasons"] = list(dict.fromkeys((maintenance.get("reasons") or []) + ["reconstruction_manual_review"]))
                         audit["maintenance"] = maintenance
                     reconstruction_done += 1
+                    emit_progress(
+                        event="reconstruction_question_finished",
+                        stage="postprocessing",
+                        index=i,
+                        total=total_questions,
+                        done=review_done + reconstruction_done,
+                        skipped=skipped,
+                        message=f"Reconstruction {i}/{total_questions} abgeschlossen (Frage {qid}).",
+                    )
                 except Exception as rec_exc:
                     audit["reconstruction"] = {"error": str(rec_exc), "recommendManualReview": True}
                     maintenance = audit.get("maintenance") or {}
                     maintenance["needsMaintenance"] = True
                     maintenance["reasons"] = list(dict.fromkeys((maintenance.get("reasons") or []) + ["reconstruction_failed_manual_review"]))
                     audit["maintenance"] = maintenance
+                    emit_progress(
+                        event="reconstruction_question_error",
+                        stage="postprocessing",
+                        index=i,
+                        total=total_questions,
+                        done=review_done + reconstruction_done,
+                        skipped=skipped,
+                        error=str(rec_exc),
+                        message=f"Reconstruction {i}/{total_questions} fehlgeschlagen (Frage {qid}): {rec_exc}",
+                    )
+            else:
+                emit_progress(
+                    event="reconstruction_question_skipped",
+                    stage="postprocessing",
+                    index=i,
+                    total=total_questions,
+                    done=review_done + reconstruction_done,
+                    skipped=skipped,
+                    message=f"Reconstruction {i}/{total_questions} übersprungen (bereits vorhanden, Frage {qid}).",
+                )
+
+        emit_progress(
+            event="postprocess_question_finished",
+            stage="postprocessing",
+            index=i,
+            total=total_questions,
+            done=review_done + reconstruction_done,
+            skipped=skipped,
+            message=f"Frage {i}/{total_questions} Postprocessing abgeschlossen (ID: {qid}).",
+        )
 
         if args.write_top_level and isinstance(audit.get("topicFinal"), dict) and isinstance(audit.get("maintenance"), dict):
             q["aiSuperTopic"] = audit["topicFinal"].get("superTopic")
@@ -1446,13 +1692,22 @@ def rerun_postprocessing_from_output(
         questions,
         threshold=float(args.abstraction_cluster_similarity),
     )
-    for q in questions:
+    for idx, q in enumerate(questions, start=1):
         qid = str(q.get("id") or "")
         audit = q.get("aiAudit")
         if not isinstance(audit, dict):
             continue
         audit.setdefault("clusters", {})
         audit["clusters"]["abstractionClusterId"] = abstraction_clusters["questionToAbstractionCluster"].get(qid)
+        emit_progress(
+            event="abstraction_clustering_question_updated",
+            stage="clustering",
+            index=idx,
+            total=total_questions,
+            done=review_done + reconstruction_done,
+            skipped=skipped,
+            message=f"Abstraktions-Clustering {idx}/{total_questions}: Cluster für Frage {qid} aktualisiert.",
+        )
 
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)

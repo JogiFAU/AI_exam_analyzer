@@ -98,14 +98,17 @@ def main() -> None:
         else {}
     )
 
-    for q in questions:
+    total_questions = len(questions)
+    for idx, q in enumerate(questions, start=1):
         qid = str(q.get("id") or "")
+        print(f"[{idx}/{total_questions}] Reclustering gestartet für Frage {qid}.")
         audit = q.setdefault("aiAudit", {})
         clusters = audit.setdefault("clusters", {})
         clusters["questionContentClusterId"] = question_to_content.get(qid)
         clusters["abstractionClusterId"] = question_to_abstraction.get(qid)
         if image_store is not None:
             clusters["questionImageClusterIds"] = question_to_image.get(qid, [])
+        print(f"[{idx}/{total_questions}] Reclustering abgeschlossen für Frage {qid}.")
 
     if isinstance(container, dict):
         container_meta = container.setdefault("meta", {})
