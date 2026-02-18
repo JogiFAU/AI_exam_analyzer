@@ -133,3 +133,61 @@ def should_run_pass_b(pass_a: Dict[str, Any], trigger_answer_conf: float, trigge
     if float(tf.get("confidence", 0.0)) < trigger_topic_conf:
         return True
     return False
+
+
+
+def run_reconstruction_pass(
+    client: Any,
+    *,
+    payload: Dict[str, Any],
+    schema: Dict[str, Any],
+    model: str,
+) -> Dict[str, Any]:
+    system = (
+        "Du bist ein Senior-Redakteur für universitäre Prüfungsaufgaben.\n"
+        "Analysiere eine Frage im Kontext von Cluster- und Wissenshinweisen.\n"
+        "Ziele:\n"
+        "1) Beurteile, ob die Frage vermutlich eine unvollständig übernommene Altfrage ist.\n"
+        "2) Erstelle eine rekonstruierte Version in gleicher Struktur (Fragetext + Antworten).\n"
+        "3) Bei qualitativ hochwertigen Fragen nur sprachlich/präziser verbessern, nicht inhaltlich verändern.\n"
+        "4) Bei schwachen Fragen fehlende/unklare Teile evidenzbasiert ergänzen (Altfragen-Hinweise vor KB).\n"
+        "Hinweis: Das Stichwort 'Altfrage' ist ein starkes Legacy-Signal.\n"
+        "Antworte strikt im JSON-Schema."
+    )
+    user = [{"type": "input_text", "text": json.dumps(payload, ensure_ascii=False)}]
+    return call_json_schema(
+        client,
+        model=model,
+        system=system,
+        user=user,
+        schema=schema,
+        format_name="reconstruction_pass",
+        temperature=0.0,
+        max_output_tokens=1200,
+    )
+
+
+def run_explainer_pass(
+    client: Any,
+    *,
+    payload: Dict[str, Any],
+    schema: Dict[str, Any],
+    model: str,
+) -> Dict[str, Any]:
+    system = (
+        "Du bist ein didaktisch starker Fach-Tutor.\n"
+        "Erkläre ausführlich die korrekte Lösung auf Basis von Frage + Kontext (Evidenz, Cluster, etc.).\n"
+        "Erkläre außerdem, warum die falschen Optionen falsch sind und ordne die Frage fachlich ein.\n"
+        "Antworte strikt im JSON-Schema."
+    )
+    user = [{"type": "input_text", "text": json.dumps(payload, ensure_ascii=False)}]
+    return call_json_schema(
+        client,
+        model=model,
+        system=system,
+        user=user,
+        schema=schema,
+        format_name="explainer_pass",
+        temperature=0.2,
+        max_output_tokens=1300,
+    )

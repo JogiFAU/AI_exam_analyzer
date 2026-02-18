@@ -12,7 +12,13 @@ from ai_exam_analyzer.knowledge_base import (
     save_index_json,
 )
 from ai_exam_analyzer.processor import process_questions
-from ai_exam_analyzer.schemas import schema_pass_a, schema_pass_b, schema_review_pass
+from ai_exam_analyzer.schemas import (
+    schema_explainer_pass,
+    schema_pass_a,
+    schema_pass_b,
+    schema_reconstruction_pass,
+    schema_review_pass,
+)
 from ai_exam_analyzer.topic_catalog import build_topic_catalog, format_topic_catalog_for_prompt
 
 
@@ -112,6 +118,20 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--repeat-min-match-ratio", type=float, default=CONFIG["REPEAT_MIN_MATCH_RATIO"],
                     help="Minimum overlap ratio between anchor-correct texts and target answers")
 
+    ap.add_argument("--enable-reconstruction-pass", dest="enable_reconstruction_pass", action="store_true",
+                    default=CONFIG["ENABLE_RECONSTRUCTION_PASS"],
+                    help="Run reconstruction/legacy assessment annotation for every question after core passes")
+    ap.add_argument("--no-enable-reconstruction-pass", dest="enable_reconstruction_pass", action="store_false",
+                    help="Disable reconstruction/legacy assessment annotation")
+    ap.add_argument("--reconstruction-model", default=CONFIG["RECONSTRUCTION_MODEL"])
+
+    ap.add_argument("--enable-explainer-pass", dest="enable_explainer_pass", action="store_true",
+                    default=CONFIG["ENABLE_EXPLAINER_PASS"],
+                    help="Run optional explainer annotation for every question")
+    ap.add_argument("--no-enable-explainer-pass", dest="enable_explainer_pass", action="store_false",
+                    help="Disable optional explainer annotation")
+    ap.add_argument("--explainer-model", default=CONFIG["EXPLAINER_MODEL"])
+
     ap.add_argument("--debug", dest="debug", action="store_true", default=CONFIG["DEBUG"],
                     help="Store raw pass outputs under aiAudit._debug")
     ap.add_argument("--no-debug", dest="debug", action="store_false",
@@ -148,6 +168,8 @@ def main() -> None:
     schema_a = schema_pass_a(topic_keys)
     schema_b = schema_pass_b(topic_keys)
     schema_review = schema_review_pass(topic_keys)
+    schema_reconstruction = schema_reconstruction_pass()
+    schema_explainer = schema_explainer_pass()
 
     data = load_json(args.input)
 
@@ -208,6 +230,8 @@ def main() -> None:
         schema_a=schema_a,
         schema_b=schema_b,
         schema_review=schema_review,
+        schema_reconstruction=schema_reconstruction,
+        schema_explainer=schema_explainer,
         cleanup_spec=cleanup_spec,
         knowledge_base=knowledge_base,
         image_store=image_store,

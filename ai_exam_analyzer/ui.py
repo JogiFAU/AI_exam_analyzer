@@ -15,7 +15,13 @@ from ai_exam_analyzer.knowledge_base import (
     save_index_json,
 )
 from ai_exam_analyzer.processor import process_questions
-from ai_exam_analyzer.schemas import schema_pass_a, schema_pass_b, schema_review_pass
+from ai_exam_analyzer.schemas import (
+    schema_explainer_pass,
+    schema_pass_a,
+    schema_pass_b,
+    schema_reconstruction_pass,
+    schema_review_pass,
+)
 from ai_exam_analyzer.topic_catalog import build_topic_catalog, format_topic_catalog_for_prompt
 
 
@@ -514,6 +520,10 @@ def _build_args() -> SimpleNamespace:
         repeat_min_anchor_conf=float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]),
         repeat_min_anchor_consensus=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]),
         repeat_min_match_ratio=float(CONFIG["REPEAT_MIN_MATCH_RATIO"]),
+        enable_reconstruction_pass=bool(CONFIG["ENABLE_RECONSTRUCTION_PASS"]),
+        reconstruction_model=str(CONFIG["RECONSTRUCTION_MODEL"]),
+        enable_explainer_pass=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
+        explainer_model=str(CONFIG["EXPLAINER_MODEL"]),
     )
 
 
@@ -588,6 +598,8 @@ def main() -> None:
         schema_a = schema_pass_a(topic_keys)
         schema_b = schema_pass_b(topic_keys)
         schema_review = schema_review_pass(topic_keys)
+        schema_reconstruction = schema_reconstruction_pass()
+        schema_explainer = schema_explainer_pass()
 
         data = load_json(args.input)
         if isinstance(data, dict) and "questions" in data:
@@ -633,6 +645,8 @@ def main() -> None:
             schema_a=schema_a,
             schema_b=schema_b,
             schema_review=schema_review,
+            schema_reconstruction=schema_reconstruction,
+            schema_explainer=schema_explainer,
             cleanup_spec=cleanup_spec,
             knowledge_base=knowledge_base,
             image_store=image_store,
