@@ -74,9 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Chunk size when parsing files from knowledge ZIP")
 
     ap.add_argument("--text-cluster-similarity", type=float, default=CONFIG["TEXT_CLUSTER_SIMILARITY"],
-                    help="Jaccard threshold for question-content clustering")
+                    help="Weighted-Jaccard threshold for question-content clustering (with retrieval top-k candidates)")
     ap.add_argument("--abstraction-cluster-similarity", type=float, default=CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"],
-                    help="Jaccard threshold for abstraction clustering")
+                    help="Weighted-Jaccard threshold for abstraction clustering")
 
     ap.add_argument("--enable-review-pass", dest="enable_review_pass", action="store_true",
                     default=CONFIG["ENABLE_REVIEW_PASS"],

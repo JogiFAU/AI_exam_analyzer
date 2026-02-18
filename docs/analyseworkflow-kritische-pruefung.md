@@ -77,7 +77,7 @@ Vor der Schleife über Einzel-Fragen wird ein globaler Kontext berechnet:
 
 1. **Textcluster über Frageninhalt**
    - Tokenisierung (lowercase, alnum + Umlaute, Tokenlänge >= 3).
-   - Ähnlichkeit = Jaccard über Tokenmengen.
+   - Ähnlichkeit = **Weighted Jaccard** (IDF-gewichtet) über Tokenmengen.
    - Clustering via Union-Find über Kandidatenpaare aus invertiertem Tokenindex.
    - Default-Schwelle: `text_cluster_similarity = 0.32`.
 
@@ -214,7 +214,7 @@ Bei `write_top_level=true` werden zusätzliche Felder gesetzt:
 
 Nach Verarbeitung aller Fragen:
 - Clustering über `question_abstraction.summary` (fallback: `questionText`),
-- gleiche Token-/Jaccard-/Union-Find-Methodik,
+- gleiche Token-/Weighted-Jaccard-/Union-Find-Methodik mit Kandidatenretrieval (Top-k) und Rare-Token-Merge-Gates,
 - Default-Schwelle: `abstraction_cluster_similarity = 0.45`.
 
 Cluster-ID wird in `aiAudit.clusters.abstractionClusterId` gespeichert.
