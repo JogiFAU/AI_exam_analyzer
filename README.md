@@ -265,6 +265,10 @@ Siehe `KNOWN_ISSUES.md`.
 --review-min-maintenance-severity 2 \
 --topic-candidate-top-k 3 \
 --topic-candidate-outside-force-passb-conf 0.92 \
+--enable-repeat-reconstruction \
+--repeat-min-similarity 0.72 \
+--repeat-min-anchor-conf 0.82 \
+--auto-apply-repeat-reconstruction \
 --run-report workflow_report.json
 ```
 
@@ -272,7 +276,13 @@ Siehe `KNOWN_ISSUES.md`.
 
 `--topic-candidate-outside-force-passb-conf` erzwingt Pass B, wenn Pass A trotz Kandidatenfilter ein Topic außerhalb der Top-k vorschlägt und die Topic-Confidence unter der Schwelle liegt.
 
-`--run-report` schreibt einen JSON-Laufbericht (u. a. Preprocessing-Gates, Candidate-Konflikte, Topic-Drift, blockierte Auto-Changes, Pass-B/Review-Häufigkeiten, Maintenance-Grundverteilung) für die nachgelagerte Kalibrierung.
+`--enable-repeat-reconstruction` aktiviert die Erkennung wiederkehrender Fragen über verschiedene Klausurjahre mit Vorschlägen zur Rekonstruktion schwacher Items.
+
+`--repeat-min-similarity` und `--repeat-min-anchor-conf` steuern, wie streng Repeat-Cluster und High-Quality-Anker ausgewählt werden.
+
+`--auto-apply-repeat-reconstruction` erlaubt automatisches Übernehmen der Rekonstruktionsvorschläge (nur wenn Preprocessing-Gates Auto-Änderungen erlauben).
+
+`--run-report` schreibt einen JSON-Laufbericht (u. a. Preprocessing-Gates, Candidate-Konflikte, Topic-Drift, Repeat-Rekonstruktionen, blockierte Auto-Changes, Pass-B/Review-Häufigkeiten, Maintenance-Grundverteilung) für die nachgelagerte Kalibrierung.
 
 
 **Hinweis V5:**

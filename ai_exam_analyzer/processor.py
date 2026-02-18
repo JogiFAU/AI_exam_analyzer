@@ -14,6 +14,7 @@ from ai_exam_analyzer.workflow_context import build_dataset_context, cluster_abs
 from ai_exam_analyzer.decision_policy import compose_confidence, should_apply_pass_b_change, should_run_review_pass
 from ai_exam_analyzer.preprocessing import compute_preprocessing_assessment
 from ai_exam_analyzer.topic_candidates import TopicCandidateIndex
+from ai_exam_analyzer.repeat_reconstruction import compute_repeat_reconstruction
 
 
 def _answer_external_indices(q: Dict[str, Any]) -> List[int]:
@@ -148,6 +149,7 @@ def process_questions(
         "topicDrift": {"passAInitialVsFinal": 0},
         "autoChange": {"blockedByGate": 0},
         "maintenanceReasons": {},
+        "repeatReconstruction": {"clustersConsidered": 0, "crossYearClusters": 0, "suggestions": 0, "autoApplied": 0},
     }
 
     def emit_progress(**payload: Any) -> None:
@@ -654,6 +656,44 @@ def process_questions(
             continue
         audit.setdefault("clusters", {})
         audit["clusters"]["abstractionClusterId"] = abstraction_clusters["questionToAbstractionCluster"].get(qid)
+
+    if bool(getattr(args, "enable_repeat_reconstruction", True)):
+        suggestions, repeat_summary = compute_repeat_reconstruction(
+            questions,
+            min_similarity=float(getattr(args, "repeat_min_similarity", 0.72)),
+            min_anchor_conf=float(getattr(args, "repeat_min_anchor_conf", 0.82)),
+        )
+        report["repeatReconstruction"].update(repeat_summary)
+
+        auto_apply = bool(getattr(args, "auto_apply_repeat_reconstruction", False))
+        for q in questions:
+            qid = str(q.get("id") or "")
+            suggestion = suggestions.get(qid)
+            if suggestion is None:
+                continue
+            audit = q.get("aiAudit")
+            if not isinstance(audit, dict):
+                continue
+            audit["repeatPattern"] = {
+                "clusterId": suggestion.cluster_id,
+                "anchorQuestionId": suggestion.anchor_question_id,
+                "anchorConfidence": suggestion.confidence,
+                "suggestedCorrectIndices": suggestion.suggested_correct_indices,
+                "matchedCorrectTexts": suggestion.matched_correct_texts,
+            }
+
+            if auto_apply:
+                gates = ((audit.get("preprocessing") or {}).get("gates") or {})
+                if bool(gates.get("allowAutoChange", True)):
+                    current_idx = sorted(set(q.get("correctIndices") or []))
+                    if suggestion.suggested_correct_indices and suggestion.suggested_correct_indices != current_idx:
+                        apply_correct_indices(q, suggestion.suggested_correct_indices)
+                        ap = (audit.get("answerPlausibility") or {})
+                        if isinstance(ap, dict):
+                            ap["finalCorrectIndices"] = suggestion.suggested_correct_indices
+                            ap["changedInDataset"] = True
+                            ap["changeSource"] = "repeat_reconstruction"
+                        report["repeatReconstruction"]["autoApplied"] += 1
 
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)

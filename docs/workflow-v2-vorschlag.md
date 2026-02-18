@@ -85,15 +85,15 @@ Diese Metriken dienen als „Regler“, um Schwellen je Fach iterativ zu kalibri
 ### Bereits umgesetzt
 - [x] **Phase 1 (teilweise):** strukturierte Preprocessing-Gates inkl. `runLlm`, `allowAutoChange`, `forceManualReview` und `qualityScore`.
 - [x] **Phase 2 (weitgehend):** deterministische `topicCandidates` (Top-k) werden je Frage in den Payload gelegt; Candidate-Konflikte können Pass B zusätzlich triggern.
-- [x] **Phase 5 (teilweise):** optionaler Run-Report (`--run-report`) mit Gate-/Pass- und Maintenance-Grundverteilungen.
+- [x] **Phase 5 (teilweise):** optionaler Run-Report (`--run-report`) mit Gate-/Pass-Metriken, Candidate-Konflikten, Topic-Drift und Maintenance-Grundverteilungen.
 
 ### Nächste Prioritäten (konkret)
-1. **Topic Candidate Qualität erhöhen**
-   - Alias-/Synonymliste pro Fach einführen (z. B. Abkürzungen, Schreibvarianten).
-   - Kandidaten-Scoring mit Tokentypen (Entity-Tokens höher gewichten).
+1. **Repeat-Reconstruction (automatisierte Verbesserung) stabilisieren**
+   - High-Quality-Anker über Jahre erkennen und auf Maintenance-Items übertragen.
+   - Auto-Apply nur bei sauberem Text-Matching + erlaubten Gates, sonst Suggestion-only.
 
-2. **Run-Report ausbauen (kalibrierbar machen)**
-   - Topic-Drift-Metrik (`topicInitial` vs `topicFinal` vs `review`).
+2. **Run-Report weiter kalibrieren**
+   - Präzisions-Proxy für Repeat-Rekonstruktionen (später durch Review bestätigt?).
    - Anteil blockierter Auto-Changes je Reason-Klasse.
 
 3. **Clustering V2 umsetzen**

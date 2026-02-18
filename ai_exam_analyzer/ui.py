@@ -505,6 +505,13 @@ def _build_args() -> SimpleNamespace:
         enable_review_pass=bool(enable_review_pass),
         review_model=review_model.strip(),
         review_min_maintenance_severity=int(review_min_maintenance_severity),
+        topic_candidate_top_k=int(CONFIG["TOPIC_CANDIDATE_TOP_K"]),
+        run_report=str(CONFIG.get("RUN_REPORT_PATH", "")),
+        topic_candidate_outside_force_passb_conf=float(CONFIG["TOPIC_CANDIDATE_OUTSIDE_FORCE_PASSB_CONF"]),
+        enable_repeat_reconstruction=bool(CONFIG["ENABLE_REPEAT_RECONSTRUCTION"]),
+        auto_apply_repeat_reconstruction=bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"]),
+        repeat_min_similarity=float(CONFIG["REPEAT_MIN_SIMILARITY"]),
+        repeat_min_anchor_conf=float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]),
     )
 
 

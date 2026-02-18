@@ -93,6 +93,20 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--topic-candidate-outside-force-passb-conf", type=float,
                     default=CONFIG["TOPIC_CANDIDATE_OUTSIDE_FORCE_PASSB_CONF"],
                     help="Run Pass B when Pass A picks topic outside candidates below this confidence")
+    ap.add_argument("--enable-repeat-reconstruction", dest="enable_repeat_reconstruction", action="store_true",
+                    default=CONFIG["ENABLE_REPEAT_RECONSTRUCTION"],
+                    help="Enable repeat-pattern reconstruction suggestions across exam years")
+    ap.add_argument("--no-enable-repeat-reconstruction", dest="enable_repeat_reconstruction", action="store_false",
+                    help="Disable repeat-pattern reconstruction suggestions")
+    ap.add_argument("--auto-apply-repeat-reconstruction", dest="auto_apply_repeat_reconstruction", action="store_true",
+                    default=CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"],
+                    help="Automatically apply repeat reconstruction suggestions when allowed by preprocessing gates")
+    ap.add_argument("--no-auto-apply-repeat-reconstruction", dest="auto_apply_repeat_reconstruction", action="store_false",
+                    help="Do not auto-apply repeat reconstruction suggestions")
+    ap.add_argument("--repeat-min-similarity", type=float, default=CONFIG["REPEAT_MIN_SIMILARITY"],
+                    help="Minimum similarity for repeat-pattern clustering")
+    ap.add_argument("--repeat-min-anchor-conf", type=float, default=CONFIG["REPEAT_MIN_ANCHOR_CONF"],
+                    help="Minimum combined confidence for high-quality repeat anchors")
 
     ap.add_argument("--debug", dest="debug", action="store_true", default=CONFIG["DEBUG"],
                     help="Store raw pass outputs under aiAudit._debug")
