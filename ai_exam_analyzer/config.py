@@ -34,4 +34,4 @@ CONFIG = {
     "REVIEW_MIN_MAINTENANCE_SEVERITY": 2,
 }
 
-PIPELINE_VERSION = "2pass-merged-v5-robust"
+PIPELINE_VERSION = "2pass-merged-v6-preprocessing-cluster-robust"

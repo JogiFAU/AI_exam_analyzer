@@ -12,6 +12,7 @@ from ai_exam_analyzer.passes import run_pass_a, run_pass_b, run_review_pass, sho
 from ai_exam_analyzer.payload import build_question_payload
 from ai_exam_analyzer.workflow_context import build_dataset_context, cluster_abstractions
 from ai_exam_analyzer.decision_policy import compose_confidence, should_apply_pass_b_change, should_run_review_pass
+from ai_exam_analyzer.preprocessing import compute_quality_maintenance_reasons
 
 
 def normalize_indices(indices: List[int], n_answers: int) -> List[int]:
@@ -160,6 +161,7 @@ def process_questions(
         answers = q.get("answers") or []
         n_answers = len(answers)
         current = normalize_indices(q.get("correctIndices") or [], n_answers)
+        pre_maintenance_reasons = compute_quality_maintenance_reasons(q)
 
         audit: Dict[str, Any] = {
             "pipelineVersion": PIPELINE_VERSION,
@@ -207,7 +209,10 @@ def process_questions(
 
             maintenance = pass_a["maintenance"]
             extra_flags = pass_a["answer_review"].get("maintenanceSuspicion", []) or []
-            merged_reasons = list(dict.fromkeys((maintenance.get("reasons") or []) + extra_flags))
+            merged_reasons = list(dict.fromkeys(pre_maintenance_reasons + (maintenance.get("reasons") or []) + extra_flags))
+            if pre_maintenance_reasons:
+                maintenance["needsMaintenance"] = True
+                maintenance["severity"] = max(int(maintenance.get("severity", 1)), 2)
 
             recommend_a = bool(pass_a["answer_review"]["recommendChange"])
             conf_a = float(pass_a["answer_review"]["confidence"])
@@ -328,6 +333,7 @@ def process_questions(
                 retrieval_quality=retrieval_quality,
                 verifier_agreed=verifier_agreed,
                 evidence_count=len(evidence_chunks),
+                knowledge_enabled=bool(knowledge_base is not None),
             )
 
             if (
