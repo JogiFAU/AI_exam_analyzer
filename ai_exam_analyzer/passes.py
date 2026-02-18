@@ -46,7 +46,7 @@ def run_pass_a(
         schema=schema,
         format_name="pass_a_audit",
         temperature=temperature,
-        max_output_tokens=1200,
+        max_output_tokens=2200,
     )
 
 
@@ -112,7 +112,7 @@ def run_review_pass(
         schema=schema,
         format_name="pass_c_review",
         temperature=0.0,
-        max_output_tokens=900,
+        max_output_tokens=1600,
     )
 
 
@@ -163,7 +163,7 @@ def run_reconstruction_pass(
         schema=schema,
         format_name="reconstruction_pass",
         temperature=0.0,
-        max_output_tokens=1200,
+        max_output_tokens=2200,
     )
 
 
@@ -189,5 +189,5 @@ def run_explainer_pass(
         schema=schema,
         format_name="explainer_pass",
         temperature=0.2,
-        max_output_tokens=1300,
+        max_output_tokens=2200,
     )
