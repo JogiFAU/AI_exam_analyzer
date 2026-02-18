@@ -770,7 +770,7 @@ def process_questions(
                 "question": payload_tmp,
                 "aiAudit": audit,
                 "relatedClusterQuestions": related,
-                "retrievedEvidence": _compact_evidence(evidence_chunks),
+                "retrievedEvidence": evidence_chunks,
                 "hasAltfrageKeyword": ("altfrage" in (str(q.get("questionText") or "").lower())),
             }
 
