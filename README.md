@@ -211,6 +211,18 @@ Optional mit Bildern (für `questionImageClusterIds`):
 ```
 
 Hinweis: Das Skript ruft intern `python -m ai_exam_analyzer.recluster_only` auf und aktualisiert nur `aiAudit.clusters` (plus `meta.clusteringRerun` im Container).
+<<<<<<< codex/analyze-repair-run-output-data-24gp9u
+Optionales Hybrid-Design mit LLM (für Abstraction-Cluster-Qualität):
+- `--enable-llm-abstraction-cluster-refinement`
+- `--cluster-refinement-model o4-mini`
+- `--cluster-refinement-max-clusters 30`
+- `--cluster-refinement-min-cluster-size 2`
+- `--cluster-refinement-merge-candidates 5`
+
+Dabei bewertet ein LLM pro Cluster mögliche thematische Ausreißer (werden ausgelagert) und prüft sinnvolle Cluster-Merges mit ähnlichen Kandidatenclustern.
+
+=======
+>>>>>>> main
 Dabei wird für **jede Frage** ein Status in der CLI ausgegeben (Start/Ende), damit Fehler und Fortschritt direkt sichtbar sind.
 
 ## Optional: Clean-up des Output-Datensatzes

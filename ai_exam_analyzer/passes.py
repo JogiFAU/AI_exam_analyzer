@@ -199,3 +199,33 @@ def run_explainer_pass(
         temperature=0.2,
         max_output_tokens=2200,
     )
+
+
+def run_abstraction_cluster_refinement(
+    client: Any,
+    *,
+    payload: Dict[str, Any],
+    schema: Dict[str, Any],
+    model: str,
+) -> Dict[str, Any]:
+    system = (
+        "Du bist ein Clustering-Reviewer für Prüfungsfragen-Abstraktionen.\n"
+        "Ziele:\n"
+        "1) Erkenne thematische Ausreißer im Source-Cluster und gib deren questionIds in removeQuestionIds zurück.\n"
+        "2) Prüfe, ob der bereinigte Source-Cluster inhaltlich mit genau einem Kandidaten-Cluster gemergt werden sollte.\n"
+        "3) Wenn kein sinnvoller Merge: mergeIntoClusterId leerer String ''.\n"
+        "4) Sei konservativ: bei Unsicherheit keine Entfernung/kein Merge.\n"
+        "Antworte strikt im JSON-Schema."
+    )
+    user = [{"type": "input_text", "text": json.dumps(payload, ensure_ascii=False)}]
+    return call_json_schema(
+        client,
+        model=model,
+        system=system,
+        user=user,
+        schema=schema,
+        format_name="abstraction_cluster_refinement",
+        temperature=0.0,
+        max_output_tokens=1200,
+        max_retries=3,
+    )

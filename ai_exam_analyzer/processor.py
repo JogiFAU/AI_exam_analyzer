@@ -1,7 +1,7 @@
 """Core processing loop for question annotation."""
 
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from ai_exam_analyzer.cleanup import cleanup_dataset
 from ai_exam_analyzer.config import PIPELINE_VERSION
@@ -9,6 +9,7 @@ from ai_exam_analyzer.io_utils import save_json
 from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.knowledge_base import KnowledgeBase, build_query_text
 from ai_exam_analyzer.passes import (
+    run_abstraction_cluster_refinement,
     run_explainer_pass,
     run_pass_a,
     run_pass_b,
@@ -176,6 +177,153 @@ def apply_correct_indices(q: Dict[str, Any], new_indices: List[int]) -> None:
     q["correctAnswers"] = correct_answers
 
 
+def _simple_tokenize(text: str) -> Set[str]:
+    return {tok for tok in (text or "").lower().replace("\n", " ").split() if len(tok) >= 3}
+
+
+def _score_cluster_overlap(source_items: List[Dict[str, Any]], target_items: List[Dict[str, Any]]) -> float:
+    src = _simple_tokenize(" ".join(str(x.get("summary") or "") for x in source_items))
+    tgt = _simple_tokenize(" ".join(str(x.get("summary") or "") for x in target_items))
+    if not src or not tgt:
+        return 0.0
+    inter = len(src & tgt)
+    union = len(src | tgt)
+    return float(inter) / float(max(1, union))
+
+
+def _apply_llm_abstraction_cluster_refinement(
+    *,
+    args: Any,
+    client: Any,
+    questions: List[Dict[str, Any]],
+    schema_cluster_refinement: Dict[str, Any],
+    emit_progress: Callable[..., None],
+) -> None:
+    if not bool(getattr(args, "enable_llm_abstraction_cluster_refinement", False)):
+        return
+
+    cluster_to_items: Dict[str, List[Dict[str, Any]]] = {}
+    question_by_id: Dict[str, Dict[str, Any]] = {}
+    for q in questions:
+        qid = str(q.get("id") or "")
+        question_by_id[qid] = q
+        audit = q.get("aiAudit") or {}
+        clusters = audit.get("clusters") or {}
+        cid = clusters.get("abstractionClusterId")
+        if cid is None:
+            continue
+        cid_s = str(cid)
+        topic_key = ((audit.get("topicFinal") or {}).get("topicKey") or (audit.get("topicInitial") or {}).get("topicKey") or "")
+        summary = (((audit.get("questionAbstraction") or {}).get("summary") or "").strip() or (q.get("questionText") or "")[:220])
+        cluster_to_items.setdefault(cid_s, []).append({"questionId": qid, "summary": summary, "topicKey": str(topic_key)})
+
+    min_size = max(2, int(getattr(args, "cluster_refinement_min_cluster_size", 2) or 2))
+    max_clusters = max(1, int(getattr(args, "cluster_refinement_max_clusters", 30) or 30))
+    merge_candidates_n = max(1, int(getattr(args, "cluster_refinement_merge_candidates", 5) or 5))
+
+    candidates = [(cid, rows) for cid, rows in cluster_to_items.items() if len(rows) >= min_size]
+    candidates.sort(key=lambda x: len(x[1]), reverse=True)
+    candidates = candidates[:max_clusters]
+    next_cluster_id = max([int(c) for c in cluster_to_items.keys() if str(c).isdigit()] + [0]) + 1
+
+    for idx, (source_cid, source_rows) in enumerate(candidates, start=1):
+        if source_cid not in cluster_to_items:
+            continue
+        source_rows = cluster_to_items[source_cid]
+        if len(source_rows) < min_size:
+            continue
+
+        others = [(cid, rows) for cid, rows in cluster_to_items.items() if cid != source_cid and len(rows) >= min_size]
+        scored = sorted(others, key=lambda x: _score_cluster_overlap(source_rows, x[1]), reverse=True)
+        merge_candidates = [
+            {
+                "clusterId": cid,
+                "size": len(rows),
+                "examples": rows[:4],
+                "overlapScore": _score_cluster_overlap(source_rows, rows),
+            }
+            for cid, rows in scored[:merge_candidates_n]
+        ]
+
+        payload = {
+            "sourceCluster": {
+                "clusterId": source_cid,
+                "size": len(source_rows),
+                "examples": source_rows[:8],
+            },
+            "mergeCandidates": merge_candidates,
+        }
+        emit_progress(
+            event="abstraction_cluster_refinement_started",
+            stage="clustering",
+            index=idx,
+            total=len(candidates),
+            message=f"LLM-Cluster-Refinement {idx}/{len(candidates)} gestartet (Cluster {source_cid}).",
+        )
+        try:
+            decision = run_abstraction_cluster_refinement(
+                client,
+                payload=payload,
+                schema=schema_cluster_refinement,
+                model=getattr(args, "cluster_refinement_model", "o4-mini"),
+            )
+        except Exception as exc:
+            emit_progress(
+                event="abstraction_cluster_refinement_error",
+                stage="clustering",
+                index=idx,
+                total=len(candidates),
+                error=str(exc),
+                message=f"LLM-Cluster-Refinement Fehler für Cluster {source_cid}: {exc}",
+            )
+            continue
+
+        remove_ids = [str(x) for x in (decision.get("removeQuestionIds") or []) if str(x) in {r["questionId"] for r in source_rows}]
+        for qid in remove_ids:
+            q = question_by_id.get(qid)
+            if not q:
+                continue
+            audit = q.get("aiAudit") or {}
+            clusters = audit.get("clusters") or {}
+            if str(clusters.get("abstractionClusterId")) != source_cid:
+                continue
+            clusters["abstractionClusterId"] = next_cluster_id
+            audit["clusters"] = clusters
+            q["aiAudit"] = audit
+            cluster_to_items.setdefault(str(next_cluster_id), []).append({
+                "questionId": qid,
+                "summary": (((audit.get("questionAbstraction") or {}).get("summary") or "").strip() or (q.get("questionText") or "")[:220]),
+                "topicKey": str(((audit.get("topicFinal") or {}).get("topicKey") or "")),
+            })
+            next_cluster_id += 1
+
+        if remove_ids:
+            cluster_to_items[source_cid] = [r for r in cluster_to_items[source_cid] if r["questionId"] not in set(remove_ids)]
+
+        merge_target = str(decision.get("mergeIntoClusterId") or "").strip()
+        if merge_target and merge_target != source_cid and merge_target in cluster_to_items and len(cluster_to_items[source_cid]) >= 1:
+            moving = list(cluster_to_items[source_cid])
+            for row in moving:
+                q = question_by_id.get(row["questionId"])
+                if not q:
+                    continue
+                audit = q.get("aiAudit") or {}
+                clusters = audit.get("clusters") or {}
+                clusters["abstractionClusterId"] = int(merge_target) if merge_target.isdigit() else merge_target
+                audit["clusters"] = clusters
+                q["aiAudit"] = audit
+            cluster_to_items[merge_target].extend(moving)
+            del cluster_to_items[source_cid]
+
+        emit_progress(
+            event="abstraction_cluster_refinement_finished",
+            stage="clustering",
+            index=idx,
+            total=len(candidates),
+            message=f"LLM-Cluster-Refinement {idx}/{len(candidates)} abgeschlossen (Cluster {source_cid}, removed={len(remove_ids)}, merge={merge_target or 'none'}).",
+        )
+
+
 def process_questions(
     *,
     args: Any,
@@ -189,6 +337,7 @@ def process_questions(
     schema_review: Dict[str, Any],
     schema_reconstruction: Dict[str, Any],
     schema_explainer: Dict[str, Any],
+    schema_cluster_refinement: Dict[str, Any],
     cleanup_spec: Optional[Dict[str, Any]] = None,
     knowledge_base: Optional[KnowledgeBase] = None,
     image_store: Optional[QuestionImageStore] = None,
@@ -211,6 +360,7 @@ def process_questions(
             key_map=key_map,
             schema_review=schema_review,
             schema_reconstruction=schema_reconstruction,
+            schema_cluster_refinement=schema_cluster_refinement,
             cleanup_spec=cleanup_spec,
             knowledge_base=knowledge_base,
             image_store=image_store,
@@ -992,6 +1142,14 @@ def process_questions(
         message="Abstraktions-Clustering abgeschlossen.",
     )
 
+    _apply_llm_abstraction_cluster_refinement(
+        args=args,
+        client=client,
+        questions=questions,
+        schema_cluster_refinement=schema_cluster_refinement,
+        emit_progress=emit_progress,
+    )
+
     if bool(getattr(args, "enable_repeat_reconstruction", True)):
         emit_progress(
             event="repeat_reconstruction_started",
@@ -1708,6 +1866,14 @@ def rerun_postprocessing_from_output(
             skipped=skipped,
             message=f"Abstraktions-Clustering {idx}/{total_questions}: Cluster für Frage {qid} aktualisiert.",
         )
+
+    _apply_llm_abstraction_cluster_refinement(
+        args=args,
+        client=client,
+        questions=questions,
+        schema_cluster_refinement=schema_cluster_refinement,
+        emit_progress=emit_progress,
+    )
 
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
