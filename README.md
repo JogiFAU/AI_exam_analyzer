@@ -126,6 +126,29 @@ Wichtige Flags:
 
 Hinweis: Für bestmögliche Qualität sollten dieselben Wissens-/Bildquellen wie im Ursprungslauf eingebunden werden.
 
+Einzelfragen gezielt neu rechnen:
+
+```bash
+python classify_topics_merged_config_fixed.py \
+  --input "Sample_Data/mibi_prac/output/export AIannotated.json" \
+  --topics "Sample_Data/mibi_prac/topic-tree.json" \
+  --output "Sample_Data/mibi_prac/output/export AIannotated.single-rerun.json" \
+  --resume \
+  --only-question-id "01f1-0751-0a3ca26c-ae00-79b8acb6e751"
+```
+
+Danach kannst du für alle Fragen nur das Postprocessing nachziehen:
+
+```bash
+python classify_topics_merged_config_fixed.py \
+  --input "Sample_Data/mibi_prac/output/export AIannotated.single-rerun.json" \
+  --topics "Sample_Data/mibi_prac/topic-tree.json" \
+  --output "Sample_Data/mibi_prac/output/export AIannotated.postprocessed.json" \
+  --postprocess-only \
+  --enable-review-pass \
+  --enable-reconstruction-pass
+```
+
 ### Wichtige Optionen
 - `--knowledge-zip`: ZIP-Datei mit Fachmaterialien.
 - `--knowledge-index`: optionaler Cache der extrahierten Chunks (schneller bei Wiederholungsruns).

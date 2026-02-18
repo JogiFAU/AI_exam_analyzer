@@ -155,6 +155,7 @@ def process_questions(
         raise RuntimeError("Missing dependency: install `openai` package (e.g. `pip install openai`).") from exc
 
     client = OpenAI()
+    selected_question_ids = {str(x).strip() for x in (getattr(args, "only_question_ids", []) or []) if str(x).strip()}
 
     if bool(getattr(args, "postprocess_only", False)):
         rerun_postprocessing_from_output(
@@ -232,6 +233,20 @@ def process_questions(
     )
 
     for i, q in enumerate(questions, start=1):
+        qid = str(q.get("id") or "")
+        if selected_question_ids and qid not in selected_question_ids:
+            skipped += 1
+            emit_progress(
+                event="question_skipped_filter",
+                index=i,
+                total=total_questions,
+                processed=processed,
+                done=done,
+                skipped=skipped,
+                message=f"Frage {i}/{total_questions} übersprungen (ID-Filter aktiv).",
+            )
+            continue
+
         if args.limit and processed >= args.limit:
             break
 
@@ -273,7 +288,6 @@ def process_questions(
         if image_store is not None:
             question_images, image_context = image_store.prepare_question_images(q)
         payload["imageContext"] = image_context
-        qid = str(q.get("id") or "")
         payload["questionClusterContext"] = {
             "clusterId": dataset_context.text_clusters["questionToCluster"].get(qid),
             "clusterMembers": dataset_context.text_clusters["clusterMembers"].get(str(dataset_context.text_clusters["questionToCluster"].get(qid)), []),
@@ -1170,6 +1184,7 @@ def rerun_postprocessing_from_output(
         progress_callback(payload)
 
     total_questions = len(questions)
+    selected_question_ids = {str(x).strip() for x in (getattr(args, "only_question_ids", []) or []) if str(x).strip()}
     emit_progress(event="postprocess_only_started", stage="postprocessing", total=total_questions,
                   message="Postprocess-only Lauf gestartet (Review/Reconstruction).")
 
@@ -1191,6 +1206,9 @@ def rerun_postprocessing_from_output(
             continue
 
         qid = str(q.get("id") or "")
+        if selected_question_ids and qid not in selected_question_ids:
+            skipped += 1
+            continue
         external_indices = _answer_external_indices(q)
         current = _coerce_dataset_correct_indices(q.get("correctIndices") or [], external_indices)
         payload = build_question_payload(q, current_correct_indices=current)

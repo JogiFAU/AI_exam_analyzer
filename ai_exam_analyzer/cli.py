@@ -143,6 +143,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="In --postprocess-only mode: rerun review pass even if reviewPass already exists")
     ap.add_argument("--force-rerun-reconstruction", dest="force_rerun_reconstruction", action="store_true", default=False,
                     help="In --postprocess-only mode: rerun reconstruction pass even if reconstruction already exists")
+    ap.add_argument(
+        "--only-question-id",
+        dest="only_question_ids",
+        action="append",
+        default=[],
+        help="Optional: only process the specified question ID (repeat flag for multiple IDs)",
+    )
     return ap
 
 

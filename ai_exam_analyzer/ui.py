@@ -256,6 +256,12 @@ def _build_args() -> SimpleNamespace:
                 require_existing=False,
             )
 
+            only_question_ids_raw = st.text_input(
+                "Nur diese Frage-ID(s) verarbeiten (optional)",
+                value="",
+                help="Kommagetrennte IDs; leer = alle Fragen.",
+            )
+
             use_cleanup_spec = st.checkbox(
                 "Whitelist/Cleanup nutzen",
                 value=bool(CONFIG["CLEANUP_SPEC_PATH"]),
@@ -535,6 +541,7 @@ def _build_args() -> SimpleNamespace:
         postprocess_only=bool(is_postprocess_only),
         force_rerun_review=bool(force_rerun_review),
         force_rerun_reconstruction=bool(force_rerun_reconstruction),
+        only_question_ids=[x.strip() for x in (only_question_ids_raw or "").split(",") if x.strip()],
         input=input_path,
         topics=topics_path,
         output=(output_path or _derive_output_path_from_input(input_path, output_folder)),
