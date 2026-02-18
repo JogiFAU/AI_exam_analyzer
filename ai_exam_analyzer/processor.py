@@ -182,11 +182,21 @@ def process_questions(
 
     emit_progress(
         event="started",
+        stage="pipeline",
         processed=processed,
         done=done,
         skipped=skipped,
         total=total_questions,
         message="Analyse gestartet.",
+    )
+    emit_progress(
+        event="dataset_context_started",
+        stage="preprocessing",
+        processed=processed,
+        done=done,
+        skipped=skipped,
+        total=total_questions,
+        message="Baue Workflow-Kontext (Text-/Bild-Cluster, Retrieval-Metadaten).",
     )
 
     dataset_context = build_dataset_context(
@@ -194,6 +204,15 @@ def process_questions(
         image_store=image_store,
         knowledge_base=knowledge_base,
         text_similarity_threshold=float(args.text_cluster_similarity),
+    )
+    emit_progress(
+        event="dataset_context_finished",
+        stage="preprocessing",
+        processed=processed,
+        done=done,
+        skipped=skipped,
+        total=total_questions,
+        message="Workflow-Kontext aufgebaut.",
     )
 
     for i, q in enumerate(questions, start=1):
@@ -213,6 +232,17 @@ def process_questions(
                     message=f"Frage {i}/{total_questions} übersprungen (bereits abgeschlossen).",
                 )
                 continue
+
+        emit_progress(
+            event="question_pipeline_started",
+            stage="question",
+            index=i,
+            total=total_questions,
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            message=f"Frage {i}/{total_questions}: Vorbereitung gestartet.",
+        )
 
         external_indices = _answer_external_indices(q)
         current = _coerce_dataset_correct_indices(q.get("correctIndices") or [], external_indices)
@@ -251,8 +281,31 @@ def process_questions(
             )
             payload["retrievedEvidence"] = evidence_chunks
 
+        emit_progress(
+            event="question_context_ready",
+            stage="question",
+            index=i,
+            total=total_questions,
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            retrieval_quality=retrieval_quality,
+            evidence_count=len(evidence_chunks),
+            message=f"Frage {i}/{total_questions}: Kontext bereit (evidence={len(evidence_chunks)}).",
+        )
+
         answers = q.get("answers") or []
         n_answers = len(answers)
+        emit_progress(
+            event="preprocessing_started",
+            stage="preprocessing",
+            index=i,
+            total=total_questions,
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            message=f"Frage {i}/{total_questions}: Preprocessing/Gates.",
+        )
         preprocessing = compute_preprocessing_assessment(q)
         pre_maintenance_reasons = preprocessing.get("reasons", [])
         gates = preprocessing.get("gates") or {}
@@ -322,6 +375,7 @@ def process_questions(
 
             emit_progress(
                 event="question_started",
+                stage="pass_a",
                 index=i,
                 total=total_questions,
                 processed=processed,
@@ -337,6 +391,16 @@ def process_questions(
                 model=args.passA_model,
                 temperature=args.passA_temperature,
                 question_images=question_images,
+            )
+            emit_progress(
+                event="pass_a_finished",
+                stage="pass_a",
+                index=i,
+                total=total_questions,
+                processed=processed,
+                done=done,
+                skipped=skipped,
+                message=f"Frage {i}/{total_questions}: Pass A abgeschlossen.",
             )
 
             proposed = normalize_indices(
@@ -391,6 +455,7 @@ def process_questions(
                 try:
                     emit_progress(
                         event="pass_b_started",
+                        stage="pass_b",
                         index=i,
                         total=total_questions,
                         processed=processed,
@@ -466,6 +531,16 @@ def process_questions(
                         final_correct_indices = current
                         final_ai_correct_indices = verified if (verified and agree and (not cannot)) else current
 
+                    emit_progress(
+                        event="pass_b_finished",
+                        stage="pass_b",
+                        index=i,
+                        total=total_questions,
+                        processed=processed,
+                        done=done,
+                        skipped=skipped,
+                        message=f"Frage {i}/{total_questions}: Pass B abgeschlossen.",
+                    )
                     verification = {
                         "ran": True,
                         "model": args.passB_model,
@@ -480,6 +555,16 @@ def process_questions(
                     }
 
                 except Exception as e:
+                    emit_progress(
+                        event="pass_b_error",
+                        stage="pass_b",
+                        index=i,
+                        total=total_questions,
+                        processed=processed,
+                        done=done,
+                        skipped=skipped,
+                        message=f"Frage {i}/{total_questions}: Pass B Fehler – {e}",
+                    )
                     audit["models"]["passB"] = args.passB_model
                     report["passes"]["passBRan"] += 1
                     verification = {"ran": True, "model": args.passB_model, "error": str(e)}
@@ -490,6 +575,16 @@ def process_questions(
                     }
 
             else:
+                emit_progress(
+                    event="pass_b_skipped",
+                    stage="pass_b",
+                    index=i,
+                    total=total_questions,
+                    processed=processed,
+                    done=done,
+                    skipped=skipped,
+                    message=f"Frage {i}/{total_questions}: Pass B nicht erforderlich.",
+                )
                 maintenance = {
                     "needsMaintenance": bool(maintenance.get("needsMaintenance")),
                     "severity": int(maintenance.get("severity", 1)),
@@ -588,6 +683,16 @@ def process_questions(
                 final_topic_key=final_topic_key,
             ):
                 try:
+                    emit_progress(
+                        event="review_started",
+                        stage="review",
+                        index=i,
+                        total=total_questions,
+                        processed=processed,
+                        done=done,
+                        skipped=skipped,
+                        message=f"Frage {i}/{total_questions}: Starte Review-Pass.",
+                    )
                     review = run_review_pass(
                         client,
                         payload=payload,
@@ -618,10 +723,41 @@ def process_questions(
                     if review.get("recommendManualReview"):
                         audit["maintenance"]["needsMaintenance"] = True
                         audit["maintenance"]["reasons"] = list(dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["review_pass_manual_review"]))
+                    emit_progress(
+                        event="review_finished",
+                        stage="review",
+                        index=i,
+                        total=total_questions,
+                        processed=processed,
+                        done=done,
+                        skipped=skipped,
+                        message=f"Frage {i}/{total_questions}: Review-Pass abgeschlossen.",
+                    )
                 except Exception as review_exc:
+                    emit_progress(
+                        event="review_error",
+                        stage="review",
+                        index=i,
+                        total=total_questions,
+                        processed=processed,
+                        done=done,
+                        skipped=skipped,
+                        message=f"Frage {i}/{total_questions}: Review-Pass Fehler – {review_exc}",
+                    )
                     audit["models"]["review"] = args.review_model
                     report["passes"]["reviewRan"] += 1
                     audit["reviewPass"] = {"error": str(review_exc)}
+            else:
+                emit_progress(
+                    event="review_skipped",
+                    stage="review",
+                    index=i,
+                    total=total_questions,
+                    processed=processed,
+                    done=done,
+                    skipped=skipped,
+                    message=f"Frage {i}/{total_questions}: Review-Pass übersprungen.",
+                )
 
             if args.debug:
                 audit["_debug"] = {"passA_raw": pass_a, "passB_raw": pass_b}
@@ -672,6 +808,15 @@ def process_questions(
 
         time.sleep(args.sleep)
 
+    emit_progress(
+        event="abstraction_clustering_started",
+        stage="postprocessing",
+        processed=processed,
+        done=done,
+        skipped=skipped,
+        total=total_questions,
+        message="Starte Abstraktions-Clustering.",
+    )
     abstraction_clusters = cluster_abstractions(
         questions,
         threshold=float(args.abstraction_cluster_similarity),
@@ -683,8 +828,26 @@ def process_questions(
             continue
         audit.setdefault("clusters", {})
         audit["clusters"]["abstractionClusterId"] = abstraction_clusters["questionToAbstractionCluster"].get(qid)
+    emit_progress(
+        event="abstraction_clustering_finished",
+        stage="postprocessing",
+        processed=processed,
+        done=done,
+        skipped=skipped,
+        total=total_questions,
+        message="Abstraktions-Clustering abgeschlossen.",
+    )
 
     if bool(getattr(args, "enable_repeat_reconstruction", True)):
+        emit_progress(
+            event="repeat_reconstruction_started",
+            stage="postprocessing",
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            total=total_questions,
+            message="Starte Repeat-Reconstruction-Analyse.",
+        )
         suggestions, repeat_summary = compute_repeat_reconstruction(
             questions,
             min_similarity=float(getattr(args, "repeat_min_similarity", 0.72)),
@@ -725,9 +888,26 @@ def process_questions(
                         report["repeatReconstruction"]["autoApplied"] += 1
                 else:
                     report["repeatReconstruction"]["blockedByGate"] += 1
-
+        emit_progress(
+            event="repeat_reconstruction_finished",
+            stage="postprocessing",
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            total=total_questions,
+            message="Repeat-Reconstruction abgeschlossen.",
+        )
 
     if bool(getattr(args, "enable_reconstruction_pass", True)):
+        emit_progress(
+            event="reconstruction_pass_started",
+            stage="postprocessing",
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            total=total_questions,
+            message="Starte Reconstruction-Pass.",
+        )
         for q in questions:
             audit = q.get("aiAudit")
             if not isinstance(audit, dict):
@@ -784,8 +964,26 @@ def process_questions(
                 audit["reconstruction"] = rec
             except Exception as rec_exc:
                 audit["reconstruction"] = {"error": str(rec_exc)}
+        emit_progress(
+            event="reconstruction_pass_finished",
+            stage="postprocessing",
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            total=total_questions,
+            message="Reconstruction-Pass abgeschlossen.",
+        )
 
     if bool(getattr(args, "enable_explainer_pass", False)):
+        emit_progress(
+            event="explainer_pass_started",
+            stage="postprocessing",
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            total=total_questions,
+            message="Starte Explainer-Pass.",
+        )
         for q in questions:
             audit = q.get("aiAudit")
             if not isinstance(audit, dict):
@@ -819,9 +1017,36 @@ def process_questions(
                 audit["explainer"] = expl
             except Exception as expl_exc:
                 audit["explainer"] = {"error": str(expl_exc)}
+        emit_progress(
+            event="explainer_pass_finished",
+            stage="postprocessing",
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            total=total_questions,
+            message="Explainer-Pass abgeschlossen.",
+        )
 
+    emit_progress(
+        event="output_write_started",
+        stage="finalize",
+        processed=processed,
+        done=done,
+        skipped=skipped,
+        total=total_questions,
+        message=f"Schreibe Ausgabe nach {args.output}.",
+    )
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
+    emit_progress(
+        event="output_write_finished",
+        stage="finalize",
+        processed=processed,
+        done=done,
+        skipped=skipped,
+        total=total_questions,
+        message=f"Ausgabe geschrieben: {args.output}.",
+    )
 
     run_report_path = (getattr(args, "run_report", "") or "").strip()
     if run_report_path:

@@ -139,6 +139,27 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+
+
+def _build_progress_printer() -> callable:
+    def on_progress(event: dict) -> None:
+        name = str(event.get("event") or "event")
+        stage = str(event.get("stage") or "")
+        index = event.get("index")
+        total = event.get("total")
+        processed = int(event.get("processed", 0) or 0)
+        done = int(event.get("done", 0) or 0)
+        skipped = int(event.get("skipped", 0) or 0)
+        prefix = f"[{stage}] " if stage else ""
+        if index is not None and total:
+            prefix += f"[{index}/{total}] "
+        msg = str(event.get("message") or "").strip()
+        if not msg:
+            msg = name
+        print(f"{prefix}{msg} | processed={processed} done={done} skipped={skipped}")
+    return on_progress
+
+
 def _derive_output_path(input_path: str, requested_output: str) -> str:
     requested_output = (requested_output or "").strip()
     if requested_output:
@@ -220,6 +241,8 @@ def main() -> None:
             subject_hint=subject_hint,
         )
 
+    progress_callback = _build_progress_printer()
+
     process_questions(
         args=args,
         questions=questions,
@@ -235,6 +258,7 @@ def main() -> None:
         cleanup_spec=cleanup_spec,
         knowledge_base=knowledge_base,
         image_store=image_store,
+        progress_callback=progress_callback,
     )
 
 
