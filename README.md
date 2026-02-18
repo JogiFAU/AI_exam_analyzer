@@ -183,6 +183,35 @@ python classify_topics_merged_config_fixed.py \
   --images-zip images.zip
 ```
 
+
+## Nur Cluster erneut berechnen (PowerShell CLI)
+
+Wenn du einen bestehenden Datensatz (z. B. `.../export AIannotated.json`) **ohne neue Modell-Calls** nur neu clustern willst, gibt es jetzt ein PowerShell-Skript mit absichtlich etwas lockereren Defaults:
+
+- `text-cluster-similarity`: **0.12** (statt 0.15)
+- `abstraction-cluster-similarity`: **0.18** (statt 0.22)
+
+Beispiel:
+
+```powershell
+./rerun-clustering.ps1 `
+  -Input "Sample_Data/mibi_prac/output/export AIannotated.json" `
+  -Output "Sample_Data/mibi_prac/output/export AIannotated.reclustered.json" `
+  -TextClusterSimilarity 0.12 `
+  -AbstractionClusterSimilarity 0.18
+```
+
+Optional mit Bildern (für `questionImageClusterIds`):
+
+```powershell
+./rerun-clustering.ps1 `
+  -Input "Sample_Data/mibi_prac/output/export AIannotated.json" `
+  -Output "Sample_Data/mibi_prac/output/export AIannotated.reclustered.json" `
+  -ImagesZip "Sample_Data/mibi_prac/images.zip"
+```
+
+Hinweis: Das Skript ruft intern `python -m ai_exam_analyzer.recluster_only` auf und aktualisiert nur `aiAudit.clusters` (plus `meta.clusteringRerun` im Container).
+
 ## Optional: Clean-up des Output-Datensatzes
 
 Mit `--cleanup-spec <datei.json>` kann der Output nach der Verarbeitung auf definierte Felder reduziert werden.
