@@ -271,6 +271,9 @@ def build_knowledge_base_from_zip(
     subject_tokens = _tokenize(subject_hint or "")
     chunks: List[Chunk] = []
     images: List[KnowledgeImage] = []
+    supported_files: List[str] = []
+    skipped_by_subject: List[str] = []
+    no_text_files: List[str] = []
 
     with zipfile.ZipFile(zpath, "r") as zf:
         for info in zf.infolist():
@@ -280,6 +283,7 @@ def build_knowledge_base_from_zip(
             lower = name.lower()
             if not (lower.endswith(".pdf") or lower.endswith(".txt") or lower.endswith(".md")):
                 continue
+            supported_files.append(name)
 
             basename = Path(name).name
             if subject_tokens:
@@ -287,20 +291,26 @@ def build_knowledge_base_from_zip(
                 # Subject hint acts as an optional file-level pre-filter. When provided,
                 # only files with at least one overlapping token are indexed.
                 if subject_tokens.isdisjoint(name_tokens):
+                    skipped_by_subject.append(name)
                     continue
 
             raw = zf.read(info)
 
             if lower.endswith(".pdf"):
-                chunks.extend(_extract_pdf_chunks_from_bytes(raw, basename, max_chunk_chars))
+                file_chunks = _extract_pdf_chunks_from_bytes(raw, basename, max_chunk_chars)
+                chunks.extend(file_chunks)
                 images.extend(_extract_pdf_images_from_bytes(raw, basename))
+                if not file_chunks:
+                    no_text_files.append(name)
             else:
                 text = raw.decode("utf-8", errors="ignore")
+                had_text_chunk = False
                 for i, chunk_text in enumerate(_chunk_text(text, max_chars=max_chunk_chars), start=1):
                     chunk_id = f"{basename}#t{i}"
                     tokens = _tokenize(chunk_text)
                     if not tokens:
                         continue
+                    had_text_chunk = True
                     term_freq = _term_freq(chunk_text)
                     chunks.append(
                         Chunk(
@@ -313,9 +323,34 @@ def build_knowledge_base_from_zip(
                             length=max(1, sum(term_freq.values())),
                         )
                     )
+                if not had_text_chunk:
+                    no_text_files.append(name)
 
     if not chunks:
-        raise RuntimeError("No extractable knowledge chunks found in ZIP (supported: PDF/TXT/MD).")
+        details: List[str] = []
+        if not supported_files:
+            details.append("No .pdf/.txt/.md files were found in the ZIP.")
+        else:
+            details.append(
+                "Found supported files: " + ", ".join(sorted(supported_files)[:8])
+            )
+            if len(supported_files) > 8:
+                details.append(f"... plus {len(supported_files) - 8} more.")
+        if skipped_by_subject:
+            details.append(
+                "Files skipped by subject-hint filter: " + ", ".join(sorted(skipped_by_subject)[:8])
+            )
+        if no_text_files:
+            details.append(
+                "Files with no extractable text chunks: " + ", ".join(sorted(set(no_text_files))[:8])
+            )
+
+        details.append(
+            "ZIP folder layout does not matter; files can be at ZIP root or in subfolders."
+        )
+        raise RuntimeError(
+            "No extractable knowledge chunks found in ZIP (supported: PDF/TXT/MD). " + " ".join(details)
+        )
 
     return KnowledgeBase(chunks, images=images)
 
