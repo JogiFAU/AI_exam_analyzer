@@ -7,12 +7,25 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
+STOPWORDS_DE = {
+    "aber", "alle", "als", "also", "am", "an", "auch", "auf", "aus", "bei", "der", "die", "das", "dem", "den",
+    "ein", "eine", "einer", "einem", "einen", "für", "im", "in", "ist", "mit", "nicht", "oder", "und", "von", "zu",
+}
+
+TEMPLATE_TOKENS = {
+    "was", "welche", "welcher", "welches", "aussage", "stimmt", "trifft", "ehesten", "richtig", "falsch", "liegt", "vor",
+}
+
+
 def _tokenize(text: str) -> Set[str]:
     out: Set[str] = set()
     for raw in (text or "").lower().replace("\n", " ").split():
         token = "".join(ch for ch in raw if ch.isalnum() or ch in "äöüß")
-        if len(token) >= 3:
-            out.add(token)
+        if len(token) < 3:
+            continue
+        if token in STOPWORDS_DE or token in TEMPLATE_TOKENS:
+            continue
+        out.add(token)
     return out
 
 
@@ -53,6 +66,22 @@ def _candidate_pairs(items: List[Set[str]]) -> Set[Tuple[int, int]]:
     return pairs
 
 
+def _prune_frequent_tokens(items: List[Set[str]], max_doc_frequency_ratio: float = 0.03) -> List[Set[str]]:
+    if not items:
+        return items
+    n = len(items)
+    if n < 5:
+        return items
+
+    df: Dict[str, int] = defaultdict(int)
+    for toks in items:
+        for tok in toks:
+            df[tok] += 1
+
+    max_df = max(2, int(n * max_doc_frequency_ratio))
+    return [{tok for tok in toks if df.get(tok, 0) <= max_df} for toks in items]
+
+
 def _cluster_by_similarity(items: List[Set[str]], threshold: float) -> List[int]:
     n = len(items)
     uf = _UnionFind(n)
@@ -60,6 +89,8 @@ def _cluster_by_similarity(items: List[Set[str]], threshold: float) -> List[int]
     for i, j in _candidate_pairs(items):
         left, right = items[i], items[j]
         if not left or not right:
+            continue
+        if len(left) < 6 or len(right) < 6:
             continue
         sim = len(left & right) / max(1, len(left | right))
         if sim >= threshold:
@@ -95,8 +126,10 @@ def build_dataset_context(
         parts = [q.get("questionText", "")]
         for a in q.get("answers") or []:
             parts.append(a.get("text", ""))
+        parts.append(q.get("explanationText", ""))
         text_sets.append(_tokenize("\n".join(parts)))
 
+    text_sets = _prune_frequent_tokens(text_sets)
     text_cluster_ids = _cluster_by_similarity(text_sets, text_similarity_threshold)
     question_text_cluster: Dict[str, int] = {}
     cluster_to_question_ids: Dict[int, List[str]] = defaultdict(list)

@@ -117,7 +117,7 @@ Pass A erhält Fragepayload + optionale Bilder und muss im Schema liefern:
 Wesentliche Prompt-Regeln:
 - Bildkontext verpflichtend berücksichtigen, falls vorhanden.
 - Bei fehlender/schwacher Evidenz konservative Confidence + ggf. Wartungsflag.
-- `proposedCorrectIndices` sind 0-basiert.
+- `proposedCorrectIndices`/`verifiedCorrectIndices` verwenden den `answerIndex` der Antwortoptionen (1-basiert), nicht die Array-Position.
 - Bei erwartetem aber fehlendem Bild: Maintenance setzen.
 
 ## 4.2 Triggerlogik für Pass B

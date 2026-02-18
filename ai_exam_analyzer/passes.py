@@ -31,7 +31,7 @@ def run_pass_a(
         "Regeln:\n"
         "- evidenceChunkIds muss genutzte Chunk-IDs aus retrievedEvidence referenzieren (oder []).\n"
         "- Nutze nur Evidenz, die fachlich direkt zur Frage passt; vermeide spekulative Schlüsse.\n"
-        "- proposedCorrectIndices sind 0-basiert.\n"
+        "- proposedCorrectIndices/verifiedCorrectIndices/finalCorrectIndices verwenden answerIndex (1-basiert), nicht Array-Position.\n"
         "- Wenn Bild erwartet wird, aber fehlt: needsMaintenance=true.\n"
         "- Antworte ausschließlich im vorgegebenen JSON-Schema.\n\n"
         f"{topic_catalog_text}"

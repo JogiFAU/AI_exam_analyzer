@@ -12,17 +12,25 @@ def compose_confidence(
     retrieval_quality: float,
     verifier_agreed: Optional[bool],
     evidence_count: int,
+    knowledge_enabled: bool,
 ) -> float:
     """Calibrated confidence heuristic with evidence prior."""
     agreement = 1.0 if verifier_agreed is True else (0.45 if verifier_agreed is None else 0.2)
     evidence_prior = 1.0 if evidence_count >= 3 else (0.8 if evidence_count == 2 else (0.55 if evidence_count == 1 else 0.35))
-    score = (
-        0.34 * float(answer_conf)
-        + 0.24 * float(topic_conf)
-        + 0.2 * float(retrieval_quality)
-        + 0.14 * agreement
-        + 0.08 * evidence_prior
-    )
+
+    weighted_terms = [
+        (0.34, float(answer_conf)),
+        (0.24, float(topic_conf)),
+        (0.14, agreement),
+    ]
+    if knowledge_enabled:
+        weighted_terms.extend([
+            (0.2, float(retrieval_quality)),
+            (0.08, evidence_prior),
+        ])
+
+    denominator = sum(weight for weight, _ in weighted_terms) or 1.0
+    score = sum(weight * value for weight, value in weighted_terms) / denominator
     return max(0.0, min(1.0, round(score, 4)))
 
 
@@ -36,7 +44,10 @@ def should_apply_pass_b_change(
     apply_min_conf_b: float,
     retrieval_quality: float,
     evidence_count: int,
+    allow_auto_change: bool = True,
 ) -> bool:
+    if not allow_auto_change:
+        return False
     if cannot_judge:
         return False
     if not agree_with_change:

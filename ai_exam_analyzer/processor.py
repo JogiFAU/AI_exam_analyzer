@@ -12,10 +12,55 @@ from ai_exam_analyzer.passes import run_pass_a, run_pass_b, run_review_pass, sho
 from ai_exam_analyzer.payload import build_question_payload
 from ai_exam_analyzer.workflow_context import build_dataset_context, cluster_abstractions
 from ai_exam_analyzer.decision_policy import compose_confidence, should_apply_pass_b_change, should_run_review_pass
+from ai_exam_analyzer.preprocessing import compute_preprocessing_assessment
 
 
-def normalize_indices(indices: List[int], n_answers: int) -> List[int]:
-    return sorted({i for i in indices if isinstance(i, int) and 0 <= i < n_answers})
+def _answer_external_indices(q: Dict[str, Any]) -> List[int]:
+    answers = q.get("answers") or []
+    out: List[int] = []
+    for i, answer in enumerate(answers):
+        idx = None
+        for key in ("answerIndex", "position", "index"):
+            value = answer.get(key)
+            if isinstance(value, int) and value > 0:
+                idx = value
+                break
+        out.append(idx if idx is not None else (i + 1))
+    return out
+
+
+def normalize_indices(indices: List[int], n_answers: int, *, valid_indices: Optional[List[int]] = None) -> List[int]:
+    valid_set = set(valid_indices or [])
+    out: List[int] = []
+    for i in (indices or []):
+        if not isinstance(i, int):
+            continue
+        if valid_set:
+            if i in valid_set:
+                out.append(i)
+        elif 0 <= i < n_answers:
+            out.append(i)
+    return sorted(set(out))
+
+
+def _coerce_dataset_correct_indices(raw_indices: List[int], external_indices: List[int]) -> List[int]:
+    """Support both legacy 0-based indices and new external 1-based answerIndex values."""
+    n_answers = len(external_indices)
+    if not raw_indices:
+        return []
+    cleaned = [i for i in raw_indices if isinstance(i, int)]
+    if not cleaned:
+        return []
+
+    ext_set = set(external_indices)
+    if all(i in ext_set for i in cleaned):
+        return sorted(set(cleaned))
+
+    if all(0 <= i < n_answers for i in cleaned):
+        mapped = [external_indices[i] for i in cleaned]
+        return sorted(set(mapped))
+
+    return sorted({i for i in cleaned if i in ext_set})
 
 
 def _build_output_obj(
@@ -45,19 +90,22 @@ def _compact_evidence(evidence_chunks: List[Dict[str, Any]]) -> List[Dict[str, A
 
 
 def apply_correct_indices(q: Dict[str, Any], new_indices: List[int]) -> None:
-    """Update correctIndices + answers[].isCorrect + correctAnswers."""
+    """Update correctIndices + answers[].isCorrect + correctAnswers using external answer indices."""
     answers = q.get("answers") or []
+    external_indices = _answer_external_indices(q)
     new_set = set(new_indices)
 
     for i, a in enumerate(answers):
-        a["isCorrect"] = (i in new_set)
+        ext_idx = external_indices[i] if i < len(external_indices) else (i + 1)
+        a["isCorrect"] = (ext_idx in new_set)
 
-    q["correctIndices"] = list(new_indices)
-    q["correctAnswers"] = [
-        {"index": i, "text": answers[i].get("text"), "html": answers[i].get("html")}
-        for i in new_indices
-        if 0 <= i < len(answers)
-    ]
+    q["correctIndices"] = sorted(new_set)
+    correct_answers: List[Dict[str, Any]] = []
+    for i, a in enumerate(answers):
+        ext_idx = external_indices[i] if i < len(external_indices) else (i + 1)
+        if ext_idx in new_set:
+            correct_answers.append({"index": ext_idx, "text": a.get("text"), "html": a.get("html")})
+    q["correctAnswers"] = correct_answers
 
 
 def process_questions(
@@ -126,7 +174,9 @@ def process_questions(
                 )
                 continue
 
-        payload = build_question_payload(q)
+        external_indices = _answer_external_indices(q)
+        current = _coerce_dataset_correct_indices(q.get("correctIndices") or [], external_indices)
+        payload = build_question_payload(q, current_correct_indices=current)
 
         question_images: List[Dict[str, Any]] = []
         image_context: Dict[str, Any] = {"imageZipConfigured": bool(image_store is not None)}
@@ -159,7 +209,8 @@ def process_questions(
 
         answers = q.get("answers") or []
         n_answers = len(answers)
-        current = normalize_indices(q.get("correctIndices") or [], n_answers)
+        preprocessing = compute_preprocessing_assessment(q)
+        pre_maintenance_reasons = preprocessing.get("reasons", [])
 
         audit: Dict[str, Any] = {
             "pipelineVersion": PIPELINE_VERSION,
@@ -175,9 +226,48 @@ def process_questions(
                 "questionContentClusterId": payload["questionClusterContext"].get("clusterId"),
                 "questionImageClusterIds": payload["imageClusterContext"].get("clusterIds", []),
             },
+            "preprocessing": preprocessing,
         }
 
         try:
+            if not bool((preprocessing.get("gates") or {}).get("runLlm", True)):
+                maintenance = {
+                    "needsMaintenance": True,
+                    "severity": 3,
+                    "reasons": list(dict.fromkeys(pre_maintenance_reasons + ["preprocessing_llm_skipped"])),
+                }
+                audit.update({
+                    "status": "completed",
+                    "topicInitial": {"superTopic": "", "subtopic": "", "confidence": 0.0, "reasonShort": "Skipped by preprocessing gate", "reasonDetailed": "runLlm=false"},
+                    "topicFinal": {"superTopic": "", "subtopic": "", "confidence": 0.0, "reasonShort": "Skipped by preprocessing gate", "reasonDetailed": "runLlm=false", "source": "preprocessing"},
+                    "answerPlausibility": {
+                        "originalCorrectIndices": current,
+                        "passA": {"isPlausible": False, "confidence": 0.0, "recommendChange": False, "proposedCorrectIndices": [], "reasonShort": "Skipped by preprocessing gate", "reasonDetailed": "runLlm=false", "evidenceChunkIds": []},
+                        "finalCorrectIndices": current,
+                        "finalAnswerConfidence": 0.0,
+                        "finalAnswerConfidenceSource": "preprocessing",
+                        "finalCombinedConfidence": 0.0,
+                        "retrievalQuality": retrieval_quality,
+                        "evidenceCount": len(evidence_chunks),
+                        "evidence": _compact_evidence(evidence_chunks),
+                        "aiDisagreesWithDataset": False,
+                        "changedInDataset": False,
+                        "changeSource": "none",
+                        "verification": {"ran": False, "skippedByPreprocessing": True},
+                    },
+                    "maintenance": maintenance,
+                    "questionAbstraction": {"summary": ""},
+                })
+                done += 1
+                q["aiAudit"] = audit
+                processed += 1
+                emit_progress(event="question_finished", index=i, total=total_questions, processed=processed, done=done, skipped=skipped, status=audit.get("status"), message=f"Frage {i}/{total_questions} abgeschlossen (preprocessing skip).")
+                if args.checkpoint_every and processed % args.checkpoint_every == 0:
+                    out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
+                    save_json(args.output, out_obj)
+                time.sleep(args.sleep)
+                continue
+
             emit_progress(
                 event="question_started",
                 index=i,
@@ -197,7 +287,11 @@ def process_questions(
                 question_images=question_images,
             )
 
-            proposed = normalize_indices(pass_a["answer_review"]["proposedCorrectIndices"], n_answers)
+            proposed = normalize_indices(
+                pass_a["answer_review"].get("proposedCorrectIndices", []),
+                n_answers,
+                valid_indices=external_indices,
+            )
 
             final_topic_key = pass_a["topic_final"]["topicKey"]
             final_topic_conf = float(pass_a["topic_final"]["confidence"])
@@ -207,7 +301,10 @@ def process_questions(
 
             maintenance = pass_a["maintenance"]
             extra_flags = pass_a["answer_review"].get("maintenanceSuspicion", []) or []
-            merged_reasons = list(dict.fromkeys((maintenance.get("reasons") or []) + extra_flags))
+            merged_reasons = list(dict.fromkeys(pre_maintenance_reasons + (maintenance.get("reasons") or []) + extra_flags))
+            if pre_maintenance_reasons:
+                maintenance["needsMaintenance"] = True
+                maintenance["severity"] = max(int(maintenance.get("severity", 1)), 2)
 
             recommend_a = bool(pass_a["answer_review"]["recommendChange"])
             conf_a = float(pass_a["answer_review"]["confidence"])
@@ -266,7 +363,11 @@ def process_questions(
                     cannot = bool(v.get("cannotJudge"))
                     agree = bool(v.get("agreeWithChange"))
                     conf_b = float(v.get("confidence"))
-                    verified = normalize_indices(v.get("verifiedCorrectIndices", []), n_answers)
+                    verified = normalize_indices(
+                        v.get("verifiedCorrectIndices", []),
+                        n_answers,
+                        valid_indices=external_indices,
+                    )
 
                     if len(verified) > 0 and verified != current:
                         ai_disagrees_with_dataset = True
@@ -285,6 +386,7 @@ def process_questions(
                         apply_min_conf_b=args.apply_change_min_conf_b,
                         retrieval_quality=retrieval_quality,
                         evidence_count=len(evidence_chunks),
+                        allow_auto_change=bool((preprocessing.get("gates") or {}).get("allowAutoChange", True)),
                     ):
                         apply_correct_indices(q, verified)
                         will_change = True
@@ -328,6 +430,7 @@ def process_questions(
                 retrieval_quality=retrieval_quality,
                 verifier_agreed=verifier_agreed,
                 evidence_count=len(evidence_chunks),
+                knowledge_enabled=bool(knowledge_base is not None),
             )
 
             if (
@@ -340,6 +443,11 @@ def process_questions(
                 maintenance["reasons"] = list(dict.fromkeys((maintenance.get("reasons") or []) + [
                     "low_confidence_answer_or_topic_or_combined"
                 ]))
+
+            if bool((preprocessing.get("gates") or {}).get("forceManualReview", False)):
+                maintenance["needsMaintenance"] = True
+                maintenance["severity"] = max(int(maintenance.get("severity", 1)), 3)
+                maintenance["reasons"] = list(dict.fromkeys((maintenance.get("reasons") or []) + ["preprocessing_force_manual_review"]))
 
             init_row = key_map[pass_a["topic_initial"]["topicKey"]]
             final_row = key_map[final_topic_key]
@@ -391,7 +499,8 @@ def process_questions(
                 },
             })
 
-            if should_run_review_pass(
+            force_manual_review = bool((preprocessing.get("gates") or {}).get("forceManualReview", False))
+            if force_manual_review or should_run_review_pass(
                 args=args,
                 maintenance=audit.get("maintenance", {}),
                 ai_disagrees_with_dataset=ai_disagrees_with_dataset,
@@ -409,7 +518,11 @@ def process_questions(
                         question_images=question_images,
                     )
                     audit["models"]["review"] = args.review_model
-                    review_indices = normalize_indices(review.get("finalCorrectIndices", []), n_answers)
+                    review_indices = normalize_indices(
+                        review.get("finalCorrectIndices", []),
+                        n_answers,
+                        valid_indices=external_indices,
+                    )
                     if review_indices and review_indices != (q.get("correctIndices") or []):
                         apply_correct_indices(q, review_indices)
                         audit["answerPlausibility"]["finalCorrectIndices"] = review_indices
