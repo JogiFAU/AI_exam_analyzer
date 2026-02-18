@@ -13,6 +13,7 @@ from ai_exam_analyzer.knowledge_base import (
 )
 from ai_exam_analyzer.processor import process_questions
 from ai_exam_analyzer.schemas import (
+    schema_abstraction_cluster_refinement,
     schema_explainer_pass,
     schema_pass_a,
     schema_pass_b,
@@ -132,6 +133,19 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Disable optional explainer annotation")
     ap.add_argument("--explainer-model", default=CONFIG["EXPLAINER_MODEL"])
 
+    ap.add_argument("--enable-llm-abstraction-cluster-refinement", dest="enable_llm_abstraction_cluster_refinement", action="store_true",
+                    default=CONFIG["ENABLE_LLM_ABSTRACTION_CLUSTER_REFINEMENT"],
+                    help="Use LLM to refine abstraction clusters (remove thematic outliers + merge similar clusters)")
+    ap.add_argument("--no-enable-llm-abstraction-cluster-refinement", dest="enable_llm_abstraction_cluster_refinement", action="store_false",
+                    help="Disable LLM-based abstraction cluster refinement")
+    ap.add_argument("--cluster-refinement-model", default=CONFIG["CLUSTER_REFINEMENT_MODEL"])
+    ap.add_argument("--cluster-refinement-max-clusters", type=int, default=CONFIG["CLUSTER_REFINEMENT_MAX_CLUSTERS"],
+                    help="Max abstraction clusters to review with LLM (largest first)")
+    ap.add_argument("--cluster-refinement-min-cluster-size", type=int, default=CONFIG["CLUSTER_REFINEMENT_MIN_CLUSTER_SIZE"],
+                    help="Minimum cluster size to be reviewed by LLM")
+    ap.add_argument("--cluster-refinement-merge-candidates", type=int, default=CONFIG["CLUSTER_REFINEMENT_MERGE_CANDIDATES"],
+                    help="How many neighbor clusters to offer as merge candidates to LLM")
+
     ap.add_argument("--debug", dest="debug", action="store_true", default=CONFIG["DEBUG"],
                     help="Store raw pass outputs under aiAudit._debug")
     ap.add_argument("--no-debug", dest="debug", action="store_false",
@@ -205,6 +219,7 @@ def main() -> None:
     schema_review = schema_review_pass(topic_keys)
     schema_reconstruction = schema_reconstruction_pass()
     schema_explainer = schema_explainer_pass()
+    schema_cluster_refinement = schema_abstraction_cluster_refinement()
 
     data = load_json(args.input)
 
@@ -269,6 +284,7 @@ def main() -> None:
         schema_review=schema_review,
         schema_reconstruction=schema_reconstruction,
         schema_explainer=schema_explainer,
+        schema_cluster_refinement=schema_cluster_refinement,
         cleanup_spec=cleanup_spec,
         knowledge_base=knowledge_base,
         image_store=image_store,
