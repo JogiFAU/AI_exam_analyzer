@@ -112,7 +112,8 @@ def run_review_pass(
         schema=schema,
         format_name="pass_c_review",
         temperature=0.0,
-        max_output_tokens=1600,
+        max_output_tokens=2200,
+        max_retries=4,
     )
 
 
@@ -151,6 +152,12 @@ def run_reconstruction_pass(
         "2) Erstelle eine rekonstruierte Version in gleicher Struktur (Fragetext + Antworten).\n"
         "3) Bei qualitativ hochwertigen Fragen nur sprachlich/präziser verbessern, nicht inhaltlich verändern.\n"
         "4) Bei schwachen Fragen fehlende/unklare Teile evidenzbasiert ergänzen (Altfragen-Hinweise vor KB).\n"
+        "Spezialregel für Antwortoptionen:\n"
+        "- Wenn die Frage weniger als 4 Antwortmöglichkeiten hat, versuche fehlende Optionen aus ähnlichen Cluster-Fragen zu ergänzen, falls inhaltlich plausibel.\n"
+        "- Wenn das nicht möglich ist, ergänze fehlende Optionen anhand relevanter Fakten aus retrievedEvidence (Knowledge-Base).\n"
+        "- Wenn beides nicht belastbar möglich ist: recommendManualReview=true und reconstructionStrategy='no_completion_manual_review'.\n"
+        "- Keine Mehrfachauswahl einführen: Es bleibt bei genau einer korrekten Antwortoption.\n"
+        "- Wenn bereits eine korrekte Antwort vorhanden ist, keine zweite korrekte Antwort hinzufügen.\n"
         "Hinweis: Das Stichwort 'Altfrage' ist ein starkes Legacy-Signal.\n"
         "Antworte strikt im JSON-Schema."
     )
@@ -163,7 +170,8 @@ def run_reconstruction_pass(
         schema=schema,
         format_name="reconstruction_pass",
         temperature=0.0,
-        max_output_tokens=2200,
+        max_output_tokens=3000,
+        max_retries=4,
     )
 
 

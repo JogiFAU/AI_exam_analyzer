@@ -112,6 +112,51 @@ def _compact_evidence(evidence_chunks: List[Dict[str, Any]]) -> List[Dict[str, A
     return compact
 
 
+def _collect_cluster_answer_candidates(
+    *,
+    questions: List[Dict[str, Any]],
+    current_qid: str,
+    cluster_id: Any,
+    max_questions: int = 8,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    if cluster_id is None:
+        return out
+
+    for other in questions:
+        other_id = str(other.get("id") or "")
+        if other_id == current_qid:
+            continue
+        other_audit = other.get("aiAudit") or {}
+        other_cluster_id = ((other_audit.get("clusters") or {}).get("abstractionClusterId"))
+        if other_cluster_id != cluster_id:
+            continue
+
+        other_correct = set(other.get("correctIndices") or [])
+        answer_rows: List[Dict[str, Any]] = []
+        for ans in (other.get("answers") or []):
+            idx = ans.get("index")
+            answer_rows.append(
+                {
+                    "answerIndex": idx,
+                    "text": ans.get("text") or "",
+                    "isLikelyCorrectInSource": bool(idx in other_correct),
+                }
+            )
+
+        out.append(
+            {
+                "questionId": other_id,
+                "questionText": (other.get("questionText") or "")[:280],
+                "answers": answer_rows,
+                "correctIndices": sorted(other_correct),
+            }
+        )
+        if len(out) >= max(1, int(max_questions)):
+            break
+    return out
+
+
 def apply_correct_indices(q: Dict[str, Any], new_indices: List[int]) -> None:
     """Update correctIndices + answers[].isCorrect + correctAnswers using external answer indices."""
     answers = q.get("answers") or []
@@ -155,6 +200,23 @@ def process_questions(
         raise RuntimeError("Missing dependency: install `openai` package (e.g. `pip install openai`).") from exc
 
     client = OpenAI()
+    selected_question_ids = {str(x).strip() for x in (getattr(args, "only_question_ids", []) or []) if str(x).strip()}
+
+    if bool(getattr(args, "postprocess_only", False)):
+        rerun_postprocessing_from_output(
+            args=args,
+            client=client,
+            questions=questions,
+            container=container,
+            key_map=key_map,
+            schema_review=schema_review,
+            schema_reconstruction=schema_reconstruction,
+            cleanup_spec=cleanup_spec,
+            knowledge_base=knowledge_base,
+            image_store=image_store,
+            progress_callback=progress_callback,
+        )
+        return
 
     done = 0
     skipped = 0
@@ -216,6 +278,20 @@ def process_questions(
     )
 
     for i, q in enumerate(questions, start=1):
+        qid = str(q.get("id") or "")
+        if selected_question_ids and qid not in selected_question_ids:
+            skipped += 1
+            emit_progress(
+                event="question_skipped_filter",
+                index=i,
+                total=total_questions,
+                processed=processed,
+                done=done,
+                skipped=skipped,
+                message=f"Frage {i}/{total_questions} übersprungen (ID-Filter aktiv).",
+            )
+            continue
+
         if args.limit and processed >= args.limit:
             break
 
@@ -257,7 +333,6 @@ def process_questions(
         if image_store is not None:
             question_images, image_context = image_store.prepare_question_images(q)
         payload["imageContext"] = image_context
-        qid = str(q.get("id") or "")
         payload["questionClusterContext"] = {
             "clusterId": dataset_context.text_clusters["questionToCluster"].get(qid),
             "clusterMembers": dataset_context.text_clusters["clusterMembers"].get(str(dataset_context.text_clusters["questionToCluster"].get(qid)), []),
@@ -746,7 +821,54 @@ def process_questions(
                     )
                     audit["models"]["review"] = args.review_model
                     report["passes"]["reviewRan"] += 1
-                    audit["reviewPass"] = {"error": str(review_exc)}
+                    # one robust fallback attempt with reduced audit context
+                    reduced_audit = {
+                        "topicFinal": audit.get("topicFinal") or {},
+                        "answerPlausibility": audit.get("answerPlausibility") or {},
+                        "maintenance": audit.get("maintenance") or {},
+                        "clusters": audit.get("clusters") or {},
+                        "preprocessing": audit.get("preprocessing") or {},
+                    }
+                    try:
+                        emit_progress(
+                            event="review_retry_started",
+                            stage="review",
+                            index=i,
+                            total=total_questions,
+                            processed=processed,
+                            done=done,
+                            skipped=skipped,
+                            message=f"Frage {i}/{total_questions}: Review-Pass Retry mit reduziertem Kontext.",
+                        )
+                        review_retry = run_review_pass(
+                            client,
+                            payload=payload,
+                            current_audit=reduced_audit,
+                            schema=schema_review,
+                            model=args.review_model,
+                            question_images=question_images,
+                        )
+                        audit["reviewPass"] = review_retry
+                        if review_retry.get("recommendManualReview"):
+                            audit["maintenance"]["needsMaintenance"] = True
+                            audit["maintenance"]["reasons"] = list(
+                                dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["review_pass_manual_review"])
+                            )
+                        emit_progress(
+                            event="review_retry_finished",
+                            stage="review",
+                            index=i,
+                            total=total_questions,
+                            processed=processed,
+                            done=done,
+                            skipped=skipped,
+                            message=f"Frage {i}/{total_questions}: Review-Pass Retry erfolgreich.",
+                        )
+                    except Exception as review_retry_exc:
+                        audit["reviewPass"] = {
+                            "error": str(review_exc),
+                            "retryError": str(review_retry_exc),
+                        }
             else:
                 emit_progress(
                     event="review_skipped",
@@ -932,6 +1054,12 @@ def process_questions(
                         })
                     if len(related) >= 8:
                         break
+            cluster_answer_candidates = _collect_cluster_answer_candidates(
+                questions=questions,
+                current_qid=qid,
+                cluster_id=cluster_id,
+                max_questions=8,
+            )
 
             payload_tmp = build_question_payload(
                 q,
@@ -950,8 +1078,11 @@ def process_questions(
                 "question": payload_tmp,
                 "aiAudit": audit,
                 "relatedClusterQuestions": related,
+                "clusterAnswerCandidates": cluster_answer_candidates,
                 "retrievedEvidence": evidence_chunks,
                 "hasAltfrageKeyword": ("altfrage" in (str(q.get("questionText") or "").lower())),
+                "answerCount": len(q.get("answers") or []),
+                "singleCorrectConstraint": True,
             }
 
             try:
@@ -962,8 +1093,43 @@ def process_questions(
                     model=args.reconstruction_model,
                 )
                 audit["reconstruction"] = rec
+                if bool(rec.get("recommendManualReview")):
+                    audit["maintenance"]["needsMaintenance"] = True
+                    audit["maintenance"]["reasons"] = list(
+                        dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["reconstruction_manual_review"])
+                    )
             except Exception as rec_exc:
-                audit["reconstruction"] = {"error": str(rec_exc)}
+                # retry with compact context to reduce token pressure
+                compact_context = {
+                    "question": reconstruction_context.get("question") or {},
+                    "clusterId": cluster_id,
+                    "relatedClusterQuestions": related[:4],
+                    "hasAltfrageKeyword": reconstruction_context.get("hasAltfrageKeyword"),
+                    "retrievedEvidence": (reconstruction_context.get("retrievedEvidence") or [])[:3],
+                }
+                try:
+                    rec_retry = run_reconstruction_pass(
+                        client,
+                        payload=compact_context,
+                        schema=schema_reconstruction,
+                        model=args.reconstruction_model,
+                    )
+                    audit["reconstruction"] = rec_retry
+                    if bool(rec_retry.get("recommendManualReview")):
+                        audit["maintenance"]["needsMaintenance"] = True
+                        audit["maintenance"]["reasons"] = list(
+                            dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["reconstruction_manual_review"])
+                        )
+                except Exception as rec_retry_exc:
+                    audit["reconstruction"] = {
+                        "error": str(rec_exc),
+                        "retryError": str(rec_retry_exc),
+                        "recommendManualReview": True,
+                    }
+                    audit["maintenance"]["needsMaintenance"] = True
+                    audit["maintenance"]["reasons"] = list(
+                        dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["reconstruction_failed_manual_review"])
+                    )
         emit_progress(
             event="reconstruction_pass_finished",
             stage="postprocessing",
@@ -1064,4 +1230,191 @@ def process_questions(
         total=total_questions,
         output_path=args.output,
         message=f"Analyse abgeschlossen. Output: {args.output}",
+    )
+
+
+def rerun_postprocessing_from_output(
+    *,
+    args: Any,
+    client: Any,
+    questions: List[Dict[str, Any]],
+    container: Optional[Dict[str, Any]],
+    key_map: Dict[str, Dict[str, Any]],
+    schema_review: Dict[str, Any],
+    schema_reconstruction: Dict[str, Any],
+    cleanup_spec: Optional[Dict[str, Any]] = None,
+    knowledge_base: Optional[KnowledgeBase] = None,
+    image_store: Optional[QuestionImageStore] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> None:
+    def emit_progress(**payload: Any) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(payload)
+
+    total_questions = len(questions)
+    selected_question_ids = {str(x).strip() for x in (getattr(args, "only_question_ids", []) or []) if str(x).strip()}
+    emit_progress(event="postprocess_only_started", stage="postprocessing", total=total_questions,
+                  message="Postprocess-only Lauf gestartet (Review/Reconstruction).")
+
+    dataset_context = build_dataset_context(
+        questions,
+        image_store=image_store,
+        knowledge_base=knowledge_base,
+        text_similarity_threshold=float(args.text_cluster_similarity),
+    )
+
+    review_done = 0
+    reconstruction_done = 0
+    skipped = 0
+
+    for i, q in enumerate(questions, start=1):
+        audit = q.get("aiAudit")
+        if not isinstance(audit, dict):
+            skipped += 1
+            continue
+
+        qid = str(q.get("id") or "")
+        if selected_question_ids and qid not in selected_question_ids:
+            skipped += 1
+            continue
+        external_indices = _answer_external_indices(q)
+        current = _coerce_dataset_correct_indices(q.get("correctIndices") or [], external_indices)
+        payload = build_question_payload(q, current_correct_indices=current)
+
+        question_images: List[Dict[str, Any]] = []
+        image_context: Dict[str, Any] = {"imageZipConfigured": bool(image_store is not None)}
+        if image_store is not None:
+            question_images, image_context = image_store.prepare_question_images(q)
+        payload["imageContext"] = image_context
+        payload["questionClusterContext"] = {
+            "clusterId": dataset_context.text_clusters["questionToCluster"].get(qid),
+            "clusterMembers": dataset_context.text_clusters["clusterMembers"].get(str(dataset_context.text_clusters["questionToCluster"].get(qid)), []),
+        }
+        question_image_clusters = ((dataset_context.image_clusters.get("questionImageClusters") or {}).get("questionToClusters") or {}).get(qid, [])
+        all_image_clusters = (dataset_context.image_clusters.get("questionImageClusters") or {}).get("clusters", [])
+        payload["imageClusterContext"] = {
+            "clusterIds": question_image_clusters,
+            "clusters": [c for c in all_image_clusters if c.get("clusterId") in set(question_image_clusters)],
+        }
+        payload["knowledgeImageContext"] = (dataset_context.image_clusters.get("knowledgeImageMatches") or {}).get(qid, [])
+
+        evidence_chunks: List[Dict[str, Any]] = []
+        if knowledge_base is not None:
+            evidence_chunks, _ = knowledge_base.retrieve(
+                build_query_text(payload),
+                top_k=max(1, int(args.knowledge_top_k)),
+                min_score=float(args.knowledge_min_score),
+                max_chars=max(500, int(args.knowledge_max_chars)),
+            )
+            payload["retrievedEvidence"] = evidence_chunks
+
+        if bool(getattr(args, "enable_review_pass", False)):
+            current_review = audit.get("reviewPass")
+            should_rerun_review = bool(getattr(args, "force_rerun_review", False)) or not isinstance(current_review, dict) or ("error" in current_review)
+            if should_rerun_review:
+                try:
+                    review = run_review_pass(
+                        client,
+                        payload=payload,
+                        current_audit=audit,
+                        schema=schema_review,
+                        model=args.review_model,
+                        question_images=question_images,
+                    )
+                    audit.setdefault("models", {})["review"] = args.review_model
+                    audit["reviewPass"] = review
+                    review_indices = normalize_indices(review.get("finalCorrectIndices", []), len(q.get("answers") or []), valid_indices=external_indices)
+                    if review_indices and isinstance(audit.get("answerPlausibility"), dict):
+                        audit["answerPlausibility"]["finalAiCorrectIndices"] = review_indices
+                    topic_key_review = review.get("finalTopicKey")
+                    if topic_key_review in key_map and isinstance(audit.get("topicFinal"), dict):
+                        topic_row_review = _topic_row_for_key(key_map, topic_key_review)
+                        audit["topicFinal"]["superTopic"] = topic_row_review["superTopicName"]
+                        audit["topicFinal"]["subtopic"] = topic_row_review["subtopicName"]
+                        audit["topicFinal"]["source"] = "review"
+                    review_done += 1
+                except Exception as review_exc:
+                    audit["reviewPass"] = {"error": str(review_exc)}
+
+        if bool(getattr(args, "enable_reconstruction_pass", True)):
+            current_reconstruction = audit.get("reconstruction")
+            should_rerun_reconstruction = bool(getattr(args, "force_rerun_reconstruction", False)) or not isinstance(current_reconstruction, dict) or ("error" in current_reconstruction)
+            if should_rerun_reconstruction:
+                cluster_id = (((audit.get("clusters") or {}).get("abstractionClusterId")) or ((audit.get("clusters") or {}).get("questionContentClusterId")))
+                related: List[Dict[str, Any]] = []
+                if cluster_id is not None:
+                    for other in questions:
+                        other_id = str(other.get("id") or "")
+                        if other_id == qid:
+                            continue
+                        other_audit = other.get("aiAudit") or {}
+                        other_cluster_id = ((other_audit.get("clusters") or {}).get("abstractionClusterId"))
+                        if other_cluster_id == cluster_id:
+                            related.append({
+                                "questionId": other_id,
+                                "questionText": (other.get("questionText") or "")[:280],
+                                "correctIndices": other.get("correctIndices") or [],
+                                "qualityNeedsMaintenance": bool(((other_audit.get("maintenance") or {}).get("needsMaintenance"))),
+                            })
+                        if len(related) >= 8:
+                            break
+                cluster_answer_candidates = _collect_cluster_answer_candidates(
+                    questions=questions,
+                    current_qid=qid,
+                    cluster_id=cluster_id,
+                    max_questions=8,
+                )
+                reconstruction_context = {
+                    "question": payload,
+                    "aiAudit": audit,
+                    "relatedClusterQuestions": related,
+                    "clusterAnswerCandidates": cluster_answer_candidates,
+                    "retrievedEvidence": evidence_chunks,
+                    "hasAltfrageKeyword": ("altfrage" in (str(q.get("questionText") or "").lower())),
+                    "answerCount": len(q.get("answers") or []),
+                    "singleCorrectConstraint": True,
+                }
+                try:
+                    rec = run_reconstruction_pass(
+                        client,
+                        payload=reconstruction_context,
+                        schema=schema_reconstruction,
+                        model=args.reconstruction_model,
+                    )
+                    audit["reconstruction"] = rec
+                    if bool(rec.get("recommendManualReview")):
+                        maintenance = audit.get("maintenance") or {}
+                        maintenance["needsMaintenance"] = True
+                        maintenance["reasons"] = list(dict.fromkeys((maintenance.get("reasons") or []) + ["reconstruction_manual_review"]))
+                        audit["maintenance"] = maintenance
+                    reconstruction_done += 1
+                except Exception as rec_exc:
+                    audit["reconstruction"] = {"error": str(rec_exc), "recommendManualReview": True}
+                    maintenance = audit.get("maintenance") or {}
+                    maintenance["needsMaintenance"] = True
+                    maintenance["reasons"] = list(dict.fromkeys((maintenance.get("reasons") or []) + ["reconstruction_failed_manual_review"]))
+                    audit["maintenance"] = maintenance
+
+        if args.write_top_level and isinstance(audit.get("topicFinal"), dict) and isinstance(audit.get("maintenance"), dict):
+            q["aiSuperTopic"] = audit["topicFinal"].get("superTopic")
+            q["aiSubtopic"] = audit["topicFinal"].get("subtopic")
+            q["aiTopicConfidence"] = audit["topicFinal"].get("confidence")
+            q["aiNeedsMaintenance"] = audit["maintenance"].get("needsMaintenance")
+            q["aiMaintenanceSeverity"] = audit["maintenance"].get("severity")
+            q["aiMaintenanceReasons"] = audit["maintenance"].get("reasons")
+
+        if args.checkpoint_every and i % args.checkpoint_every == 0:
+            out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
+            save_json(args.output, out_obj)
+
+    out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
+    save_json(args.output, out_obj)
+    emit_progress(
+        event="postprocess_only_finished",
+        stage="postprocessing",
+        total=total_questions,
+        done=review_done + reconstruction_done,
+        skipped=skipped,
+        message=f"Postprocess-only abgeschlossen (review aktualisiert: {review_done}, reconstruction aktualisiert: {reconstruction_done}, ohne aiAudit: {skipped}).",
     )
