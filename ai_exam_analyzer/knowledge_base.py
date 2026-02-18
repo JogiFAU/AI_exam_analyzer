@@ -284,8 +284,10 @@ def build_knowledge_base_from_zip(
             basename = Path(name).name
             if subject_tokens:
                 name_tokens = _tokenize(name)
+                # Subject hint acts as an optional file-level pre-filter. When provided,
+                # only files with at least one overlapping token are indexed.
                 if subject_tokens.isdisjoint(name_tokens):
-                    pass
+                    continue
 
             raw = zf.read(info)
 

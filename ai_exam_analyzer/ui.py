@@ -32,13 +32,17 @@ def _resolve_path(*, folder: str, filename: str) -> str:
     return filename
 
 
-def _derive_output_path_from_input(input_path: str) -> str:
+def _derive_output_path_from_input(input_path: str, output_folder: str = "") -> str:
     input_path = (input_path or "").strip()
+    output_folder = (output_folder or "").strip()
     input_dir = os.path.dirname(input_path)
     input_name = os.path.basename(input_path)
     stem, _ = os.path.splitext(input_name)
     stem = stem or "export"
     output_name = f"{stem} AIannotated.json"
+
+    if output_folder:
+        return os.path.join(output_folder, output_name)
     return os.path.join(input_dir, output_name) if input_dir else output_name
 
 
@@ -190,7 +194,12 @@ def _build_args() -> SimpleNamespace:
                 else:
                     st.warning("Ordner-Dialog konnte nicht geöffnet werden (z. B. kein GUI-Support).")
 
-            output_status_name = output_default_name or os.path.basename(_derive_output_path_from_input(_resolve_path(folder=data_folder, filename=input_default_name)))
+            output_status_name = output_default_name or os.path.basename(
+                _derive_output_path_from_input(
+                    _resolve_path(folder=data_folder, filename=input_default_name),
+                    output_folder,
+                )
+            )
             defaults = [
                 ("Input", input_default_name),
                 ("Topic-Tree", topics_default_name),
@@ -219,7 +228,7 @@ def _build_args() -> SimpleNamespace:
                 start_dir=data_folder,
                 help_text="Topic-Struktur-Datei (z. B. topic-tree.json).",
             )
-            derived_output_path = _derive_output_path_from_input(input_path)
+            derived_output_path = _derive_output_path_from_input(input_path, output_folder)
             if output_default_name:
                 output_default_path = _resolve_path(folder=output_folder, filename=output_default_name)
             else:
@@ -466,7 +475,7 @@ def _build_args() -> SimpleNamespace:
     return SimpleNamespace(
         input=input_path,
         topics=topics_path,
-        output=(output_path or _derive_output_path_from_input(input_path)),
+        output=(output_path or _derive_output_path_from_input(input_path, output_folder)),
         api_key=api_key,
         resume=resume,
         limit=int(limit),

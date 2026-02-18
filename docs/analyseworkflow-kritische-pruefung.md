@@ -268,3 +268,34 @@ Für eine fundierte Weiterentwicklung sollten insbesondere diese Punkte auditier
 Der implementierte Algorithmus ist ein **mehrstufiges, evidenzbasiertes Prüfverfahren** mit klarer Trennung von Erstanalyse und Verifikation.
 Die aktuelle Logik priorisiert Vorsicht (Maintenance/Verifier/Confidence-Kombination), bleibt aber in zentralen Parametern heuristisch.
 Damit ist sie gut für produktiven Betrieb mit Human-Review-Anbindung geeignet, benötigt für maximale Qualität jedoch eine datengetriebene Nachkalibrierung der Schwellen, Gewichte und Trigger.
+
+## 9) Ergebnis der Implementierungsprüfung (Code-Check)
+
+Die Codebasis wurde darauf geprüft, ob der dokumentierte Workflow praktisch ausführbar ist und ob UI-Parameter bis in die interne Verarbeitung durchgereicht werden.
+
+### 9.1 Strukturelle Befunde
+
+1. **Output-Ordner in der UI war zuvor nur teilweise wirksam**
+   - Vor der Korrektur wurde der automatisch abgeleitete Output-Pfad aus dem Input-Pfad erzeugt.
+   - Dadurch konnte die Auswahl „Ausgabeordner“ wirkungslos sein, wenn kein expliziter Output-Dateiname gesetzt wurde.
+   - **Status:** behoben (Output-Autopfad berücksichtigt jetzt den gewählten Ausgabeordner).
+
+2. **`knowledge_subject_hint` war zuvor funktional wirkungslos**
+   - In der ZIP-Ingestion wurde zwar `subject_hint` tokenisiert, aber bei fehlender Übereinstimmung nur `pass` ausgeführt.
+   - Damit hatte die UI-Einstellung „Subject Hint“ keinen Effekt auf den Index.
+   - **Status:** behoben (bei gesetztem Subject Hint werden nur Dateien mit Token-Überlappung indexiert).
+
+### 9.2 UI → interne Settings (Wirkungsprüfung)
+
+Folgende UI-Parameter wirken auf die interne Pipeline:
+- Pass-A/B Modell + Temperatur/Reasoning Effort,
+- Trigger- und Change-Schwellen,
+- Low-Confidence-Maintenance,
+- Knowledge-Parameter (`top_k`, `max_chars`, `min_score`, `chunk_chars`),
+- Clustering-Schwellen,
+- Review-Pass-Schalter und Schweregrad,
+- Debug/Top-Level-Write,
+- Eingabe-/Ausgabe-/ZIP-/Index-Pfade.
+
+Nach den beiden Korrekturen sind auch die zuvor kritischen Punkte
+**Output-Folder-Ableitung** und **Subject-Hint-Wirkung** technisch wirksam.
