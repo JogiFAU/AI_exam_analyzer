@@ -175,8 +175,22 @@ def schema_reconstruction_pass() -> Dict[str, Any]:
             },
             "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
             "reasoning": {"type": "string"},
+            "reconstructionStrategy": {
+                "type": "string",
+                "enum": ["cluster_completion", "knowledge_completion", "no_completion_manual_review"],
+            },
+            "recommendManualReview": {"type": "boolean"},
         },
-        "required": ["isLikelyLegacyQuestion", "legacySignals", "qualityClass", "reconstructedQuestion", "confidence", "reasoning"],
+        "required": [
+            "isLikelyLegacyQuestion",
+            "legacySignals",
+            "qualityClass",
+            "reconstructedQuestion",
+            "confidence",
+            "reasoning",
+            "reconstructionStrategy",
+            "recommendManualReview",
+        ],
         "additionalProperties": False,
     }
 

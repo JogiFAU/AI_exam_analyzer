@@ -112,6 +112,51 @@ def _compact_evidence(evidence_chunks: List[Dict[str, Any]]) -> List[Dict[str, A
     return compact
 
 
+def _collect_cluster_answer_candidates(
+    *,
+    questions: List[Dict[str, Any]],
+    current_qid: str,
+    cluster_id: Any,
+    max_questions: int = 8,
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    if cluster_id is None:
+        return out
+
+    for other in questions:
+        other_id = str(other.get("id") or "")
+        if other_id == current_qid:
+            continue
+        other_audit = other.get("aiAudit") or {}
+        other_cluster_id = ((other_audit.get("clusters") or {}).get("abstractionClusterId"))
+        if other_cluster_id != cluster_id:
+            continue
+
+        other_correct = set(other.get("correctIndices") or [])
+        answer_rows: List[Dict[str, Any]] = []
+        for ans in (other.get("answers") or []):
+            idx = ans.get("index")
+            answer_rows.append(
+                {
+                    "answerIndex": idx,
+                    "text": ans.get("text") or "",
+                    "isLikelyCorrectInSource": bool(idx in other_correct),
+                }
+            )
+
+        out.append(
+            {
+                "questionId": other_id,
+                "questionText": (other.get("questionText") or "")[:280],
+                "answers": answer_rows,
+                "correctIndices": sorted(other_correct),
+            }
+        )
+        if len(out) >= max(1, int(max_questions)):
+            break
+    return out
+
+
 def apply_correct_indices(q: Dict[str, Any], new_indices: List[int]) -> None:
     """Update correctIndices + answers[].isCorrect + correctAnswers using external answer indices."""
     answers = q.get("answers") or []
@@ -1009,6 +1054,12 @@ def process_questions(
                         })
                     if len(related) >= 8:
                         break
+            cluster_answer_candidates = _collect_cluster_answer_candidates(
+                questions=questions,
+                current_qid=qid,
+                cluster_id=cluster_id,
+                max_questions=8,
+            )
 
             payload_tmp = build_question_payload(
                 q,
@@ -1027,8 +1078,11 @@ def process_questions(
                 "question": payload_tmp,
                 "aiAudit": audit,
                 "relatedClusterQuestions": related,
+                "clusterAnswerCandidates": cluster_answer_candidates,
                 "retrievedEvidence": evidence_chunks,
                 "hasAltfrageKeyword": ("altfrage" in (str(q.get("questionText") or "").lower())),
+                "answerCount": len(q.get("answers") or []),
+                "singleCorrectConstraint": True,
             }
 
             try:
@@ -1039,6 +1093,11 @@ def process_questions(
                     model=args.reconstruction_model,
                 )
                 audit["reconstruction"] = rec
+                if bool(rec.get("recommendManualReview")):
+                    audit["maintenance"]["needsMaintenance"] = True
+                    audit["maintenance"]["reasons"] = list(
+                        dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["reconstruction_manual_review"])
+                    )
             except Exception as rec_exc:
                 # retry with compact context to reduce token pressure
                 compact_context = {
@@ -1056,11 +1115,21 @@ def process_questions(
                         model=args.reconstruction_model,
                     )
                     audit["reconstruction"] = rec_retry
+                    if bool(rec_retry.get("recommendManualReview")):
+                        audit["maintenance"]["needsMaintenance"] = True
+                        audit["maintenance"]["reasons"] = list(
+                            dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["reconstruction_manual_review"])
+                        )
                 except Exception as rec_retry_exc:
                     audit["reconstruction"] = {
                         "error": str(rec_exc),
                         "retryError": str(rec_retry_exc),
+                        "recommendManualReview": True,
                     }
+                    audit["maintenance"]["needsMaintenance"] = True
+                    audit["maintenance"]["reasons"] = list(
+                        dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["reconstruction_failed_manual_review"])
+                    )
         emit_progress(
             event="reconstruction_pass_finished",
             stage="postprocessing",
@@ -1290,12 +1359,21 @@ def rerun_postprocessing_from_output(
                             })
                         if len(related) >= 8:
                             break
+                cluster_answer_candidates = _collect_cluster_answer_candidates(
+                    questions=questions,
+                    current_qid=qid,
+                    cluster_id=cluster_id,
+                    max_questions=8,
+                )
                 reconstruction_context = {
                     "question": payload,
                     "aiAudit": audit,
                     "relatedClusterQuestions": related,
+                    "clusterAnswerCandidates": cluster_answer_candidates,
                     "retrievedEvidence": evidence_chunks,
                     "hasAltfrageKeyword": ("altfrage" in (str(q.get("questionText") or "").lower())),
+                    "answerCount": len(q.get("answers") or []),
+                    "singleCorrectConstraint": True,
                 }
                 try:
                     rec = run_reconstruction_pass(
@@ -1305,9 +1383,18 @@ def rerun_postprocessing_from_output(
                         model=args.reconstruction_model,
                     )
                     audit["reconstruction"] = rec
+                    if bool(rec.get("recommendManualReview")):
+                        maintenance = audit.get("maintenance") or {}
+                        maintenance["needsMaintenance"] = True
+                        maintenance["reasons"] = list(dict.fromkeys((maintenance.get("reasons") or []) + ["reconstruction_manual_review"]))
+                        audit["maintenance"] = maintenance
                     reconstruction_done += 1
                 except Exception as rec_exc:
-                    audit["reconstruction"] = {"error": str(rec_exc)}
+                    audit["reconstruction"] = {"error": str(rec_exc), "recommendManualReview": True}
+                    maintenance = audit.get("maintenance") or {}
+                    maintenance["needsMaintenance"] = True
+                    maintenance["reasons"] = list(dict.fromkeys((maintenance.get("reasons") or []) + ["reconstruction_failed_manual_review"]))
+                    audit["maintenance"] = maintenance
 
         if args.write_top_level and isinstance(audit.get("topicFinal"), dict) and isinstance(audit.get("maintenance"), dict):
             q["aiSuperTopic"] = audit["topicFinal"].get("superTopic")
