@@ -276,6 +276,9 @@ def build_knowledge_base_from_zip(
     no_text_files: List[str] = []
 
     with zipfile.ZipFile(zpath, "r") as zf:
+        entries: List[Tuple[zipfile.ZipInfo, str, bool]] = []
+        has_subject_overlap = False
+
         for info in zf.infolist():
             if info.is_dir():
                 continue
@@ -283,16 +286,23 @@ def build_knowledge_base_from_zip(
             lower = name.lower()
             if not (lower.endswith(".pdf") or lower.endswith(".txt") or lower.endswith(".md")):
                 continue
-            supported_files.append(name)
 
-            basename = Path(name).name
+            supported_files.append(name)
+            matches_subject = True
             if subject_tokens:
-                name_tokens = _tokenize(name)
-                # Subject hint acts as an optional file-level pre-filter. When provided,
-                # only files with at least one overlapping token are indexed.
-                if subject_tokens.isdisjoint(name_tokens):
-                    skipped_by_subject.append(name)
-                    continue
+                matches_subject = not subject_tokens.isdisjoint(_tokenize(name))
+                has_subject_overlap = has_subject_overlap or matches_subject
+            entries.append((info, lower, matches_subject))
+
+        apply_subject_filter = bool(subject_tokens and has_subject_overlap)
+
+        for info, lower, matches_subject in entries:
+            name = info.filename
+            basename = Path(name).name
+
+            if apply_subject_filter and not matches_subject:
+                skipped_by_subject.append(name)
+                continue
 
             raw = zf.read(info)
 
@@ -339,6 +349,10 @@ def build_knowledge_base_from_zip(
         if skipped_by_subject:
             details.append(
                 "Files skipped by subject-hint filter: " + ", ".join(sorted(skipped_by_subject)[:8])
+            )
+        elif subject_tokens and supported_files:
+            details.append(
+                "Subject-hint filter was ignored because no filename matched the hint tokens."
             )
         if no_text_files:
             details.append(
