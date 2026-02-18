@@ -50,6 +50,45 @@ def call_json_schema(
             raise RuntimeError("Responses API returned no parseable text output.")
         return merged
 
+    def _is_incomplete_error(message: str) -> bool:
+        msg = message.lower()
+        return (
+            "response not completed: incomplete" in msg
+            or "response not completed: in_progress" in msg
+            or "response not completed: queued" in msg
+        )
+
+    def _parse_json_from_response(resp: Any) -> Dict[str, Any]:
+        raw_text = _extract_output_text(resp)
+        try:
+            parsed = json.loads(raw_text)
+        except json.JSONDecodeError as exc:
+            status = str(getattr(resp, "status", ""))
+            raise RuntimeError(f"Invalid JSON payload from response status={status}: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise RuntimeError(f"Structured output must decode to object, got {type(parsed).__name__}.")
+        return parsed
+
+    def _poll_response_until_terminal(resp: Any, *, poll_attempts: int = 4, sleep_s: float = 0.35) -> Any:
+        status = str(getattr(resp, "status", ""))
+        if status in {"completed", "failed", "incomplete", "cancelled"}:
+            return resp
+
+        response_id = getattr(resp, "id", None)
+        if not response_id:
+            return resp
+
+        for _ in range(max(0, int(poll_attempts))):
+            time.sleep(max(0.05, float(sleep_s)))
+            try:
+                resp = client.responses.retrieve(response_id)
+            except Exception:
+                return resp
+            status = str(getattr(resp, "status", ""))
+            if status in {"completed", "failed", "incomplete", "cancelled"}:
+                return resp
+        return resp
+
     def _single_call(send_temperature: bool, tokens: int) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "model": model,
@@ -75,7 +114,18 @@ def call_json_schema(
             params["reasoning"] = {"effort": reasoning_effort}
 
         resp = client.responses.create(**params)
+        resp = _poll_response_until_terminal(resp)
         status = str(getattr(resp, "status", ""))
+        if status == "completed":
+            return _parse_json_from_response(resp)
+
+        # Some providers occasionally mark responses as incomplete even though
+        # the structured JSON is already parseable. Use it when possible.
+        try:
+            return _parse_json_from_response(resp)
+        except Exception:
+            pass
+
         if status != "completed":
             details = getattr(resp, "incomplete_details", None)
             reason = None
@@ -85,7 +135,7 @@ def call_json_schema(
                 reason = details.model_dump().get("reason")
             suffix = f" (reason={reason})" if reason else ""
             raise RuntimeError(f"Response not completed: {status}{suffix}")
-        return json.loads(_extract_output_text(resp))
+        return _parse_json_from_response(resp)
 
     def _call_with_retries(send_temperature: bool) -> Dict[str, Any]:
         current_tokens = max(256, int(max_output_tokens))
@@ -99,18 +149,19 @@ def call_json_schema(
                 last_error = exc
 
                 is_retryable = (
-                    "Response not completed: incomplete" in msg
+                    _is_incomplete_error(msg)
                     or "timed out" in msg.lower()
                     or "rate limit" in msg.lower()
                     or "temporarily unavailable" in msg.lower()
+                    or "connection" in msg.lower()
                 )
                 if attempt >= max_retries or not is_retryable:
                     break
 
                 # for incomplete outputs, raise available output budget on retry
-                if "Response not completed: incomplete" in msg:
+                if _is_incomplete_error(msg):
                     current_tokens = min(4000, int(current_tokens * 1.6) + 128)
-                time.sleep(0.35 * (attempt + 1))
+                time.sleep(0.45 * (attempt + 1))
 
         if last_error is None:
             raise RuntimeError("Unknown Responses API failure.")

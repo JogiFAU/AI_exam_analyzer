@@ -746,7 +746,54 @@ def process_questions(
                     )
                     audit["models"]["review"] = args.review_model
                     report["passes"]["reviewRan"] += 1
-                    audit["reviewPass"] = {"error": str(review_exc)}
+                    # one robust fallback attempt with reduced audit context
+                    reduced_audit = {
+                        "topicFinal": audit.get("topicFinal") or {},
+                        "answerPlausibility": audit.get("answerPlausibility") or {},
+                        "maintenance": audit.get("maintenance") or {},
+                        "clusters": audit.get("clusters") or {},
+                        "preprocessing": audit.get("preprocessing") or {},
+                    }
+                    try:
+                        emit_progress(
+                            event="review_retry_started",
+                            stage="review",
+                            index=i,
+                            total=total_questions,
+                            processed=processed,
+                            done=done,
+                            skipped=skipped,
+                            message=f"Frage {i}/{total_questions}: Review-Pass Retry mit reduziertem Kontext.",
+                        )
+                        review_retry = run_review_pass(
+                            client,
+                            payload=payload,
+                            current_audit=reduced_audit,
+                            schema=schema_review,
+                            model=args.review_model,
+                            question_images=question_images,
+                        )
+                        audit["reviewPass"] = review_retry
+                        if review_retry.get("recommendManualReview"):
+                            audit["maintenance"]["needsMaintenance"] = True
+                            audit["maintenance"]["reasons"] = list(
+                                dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["review_pass_manual_review"])
+                            )
+                        emit_progress(
+                            event="review_retry_finished",
+                            stage="review",
+                            index=i,
+                            total=total_questions,
+                            processed=processed,
+                            done=done,
+                            skipped=skipped,
+                            message=f"Frage {i}/{total_questions}: Review-Pass Retry erfolgreich.",
+                        )
+                    except Exception as review_retry_exc:
+                        audit["reviewPass"] = {
+                            "error": str(review_exc),
+                            "retryError": str(review_retry_exc),
+                        }
             else:
                 emit_progress(
                     event="review_skipped",
@@ -963,7 +1010,27 @@ def process_questions(
                 )
                 audit["reconstruction"] = rec
             except Exception as rec_exc:
-                audit["reconstruction"] = {"error": str(rec_exc)}
+                # retry with compact context to reduce token pressure
+                compact_context = {
+                    "question": reconstruction_context.get("question") or {},
+                    "clusterId": cluster_id,
+                    "relatedClusterQuestions": related[:4],
+                    "hasAltfrageKeyword": reconstruction_context.get("hasAltfrageKeyword"),
+                    "retrievedEvidence": (reconstruction_context.get("retrievedEvidence") or [])[:3],
+                }
+                try:
+                    rec_retry = run_reconstruction_pass(
+                        client,
+                        payload=compact_context,
+                        schema=schema_reconstruction,
+                        model=args.reconstruction_model,
+                    )
+                    audit["reconstruction"] = rec_retry
+                except Exception as rec_retry_exc:
+                    audit["reconstruction"] = {
+                        "error": str(rec_exc),
+                        "retryError": str(rec_retry_exc),
+                    }
         emit_progress(
             event="reconstruction_pass_finished",
             stage="postprocessing",

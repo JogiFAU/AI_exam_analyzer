@@ -112,7 +112,8 @@ def run_review_pass(
         schema=schema,
         format_name="pass_c_review",
         temperature=0.0,
-        max_output_tokens=1600,
+        max_output_tokens=2200,
+        max_retries=4,
     )
 
 
@@ -163,7 +164,8 @@ def run_reconstruction_pass(
         schema=schema,
         format_name="reconstruction_pass",
         temperature=0.0,
-        max_output_tokens=2200,
+        max_output_tokens=3000,
+        max_retries=4,
     )
 
 
