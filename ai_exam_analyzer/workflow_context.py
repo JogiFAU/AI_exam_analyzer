@@ -46,7 +46,7 @@ def _tokenize(text: str) -> Set[str]:
     return out
 
 
-def _prune_frequent_tokens(items: List[Set[str]], max_doc_frequency_ratio: float = 0.03) -> Tuple[List[Set[str]], Dict[str, int]]:
+def _prune_frequent_tokens(items: List[Set[str]], max_doc_frequency_ratio: float = 0.12) -> Tuple[List[Set[str]], Dict[str, int]]:
     if not items:
         return items, {}
     n = len(items)
@@ -80,7 +80,7 @@ def _weighted_jaccard(a: Set[str], b: Set[str], *, df: Dict[str, int], n_docs: i
     return num / den
 
 
-def _shared_rare_count(a: Set[str], b: Set[str], *, df: Dict[str, int], n_docs: int, min_idf: float = 2.2) -> int:
+def _shared_rare_count(a: Set[str], b: Set[str], *, df: Dict[str, int], n_docs: int, min_idf: float = 1.8) -> int:
     c = 0
     for t in (a & b):
         if _idf(df, n_docs, t) >= min_idf:
@@ -123,9 +123,11 @@ def _cluster_by_similarity(items: List[Set[str]], threshold: float, *, df: Dict[
         left, right = items[i], items[j]
         if not left or not right:
             continue
-        if len(left) < 6 or len(right) < 6:
+        if len(left) < 4 or len(right) < 4:
             continue
-        if _shared_rare_count(left, right, df=df, n_docs=n, min_idf=2.2) < 1:
+        shared_rare = _shared_rare_count(left, right, df=df, n_docs=n, min_idf=1.8)
+        shared_all = len(left & right)
+        if shared_rare < 1 and shared_all < 2:
             continue
         sim = _weighted_jaccard(left, right, df=df, n_docs=n)
         if sim >= threshold:
