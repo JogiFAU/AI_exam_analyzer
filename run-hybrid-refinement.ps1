@@ -1,9 +1,9 @@
 param(
     [Parameter(Mandatory=$true)]
-    [string]$Input,
+    [string]$InputPath,
 
     [Parameter(Mandatory=$true)]
-    [string]$Topics,
+    [string]$TopicsPath,
 
     [Parameter(Mandatory=$false)]
     [string]$Output = "",
@@ -57,34 +57,34 @@ function Has-Text([string]$Value) {
     return -not [string]::IsNullOrWhiteSpace($Value)
 }
 
-if ($null -eq $Input) { $Input = "" }
-if ($null -eq $Topics) { $Topics = "" }
+if ($null -eq $InputPath) { $InputPath = "" }
+if ($null -eq $TopicsPath) { $TopicsPath = "" }
 if ($null -eq $Output) { $Output = "" }
 if ($null -eq $ImagesZip) { $ImagesZip = "" }
 if ($null -eq $KnowledgeZip) { $KnowledgeZip = "" }
 if ($null -eq $KnowledgeIndex) { $KnowledgeIndex = "" }
 if ($null -eq $PythonExe) { $PythonExe = "python" }
 
-$Input = $Input.Trim()
-$Topics = $Topics.Trim()
+$InputPath = $InputPath.Trim()
+$TopicsPath = $TopicsPath.Trim()
 $Output = $Output.Trim()
 $ImagesZip = $ImagesZip.Trim()
 $KnowledgeZip = $KnowledgeZip.Trim()
 $KnowledgeIndex = $KnowledgeIndex.Trim()
 $PythonExe = $PythonExe.Trim()
 
-if (-not (Has-Text $Input)) {
+if (-not (Has-Text $InputPath)) {
     throw "Input darf nicht leer sein."
 }
-if (-not (Has-Text $Topics)) {
+if (-not (Has-Text $TopicsPath)) {
     throw "Topics darf nicht leer sein."
 }
 
-if (-not (Test-Path -LiteralPath $Input)) {
-    throw "Input-Datei nicht gefunden: $Input"
+if (-not (Test-Path -LiteralPath $InputPath)) {
+    throw "Input-Datei nicht gefunden: $InputPath"
 }
-if (-not (Test-Path -LiteralPath $Topics)) {
-    throw "Topic-Datei nicht gefunden: $Topics"
+if (-not (Test-Path -LiteralPath $TopicsPath)) {
+    throw "Topic-Datei nicht gefunden: $TopicsPath"
 }
 if ((Has-Text $ImagesZip) -and -not (Test-Path -LiteralPath $ImagesZip)) {
     throw "ImagesZip-Datei nicht gefunden: $ImagesZip"
@@ -95,8 +95,8 @@ if ((Has-Text $KnowledgeZip) -and -not (Test-Path -LiteralPath $KnowledgeZip)) {
 
 $args = @(
     "classify_topics_merged_config_fixed.py",
-    "--input", $Input,
-    "--topics", $Topics,
+    "--input", $InputPath,
+    "--topics", $TopicsPath,
     "--postprocess-only",
     "--enable-llm-abstraction-cluster-refinement",
     "--cluster-refinement-model", $ClusterRefinementModel,

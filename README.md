@@ -229,8 +229,8 @@ Für den neuen LLM-basierten Abstraction-Cluster-Refinement-Run gibt es zusätzl
 
 ```powershell
 ./run-hybrid-refinement.ps1 `
-  -Input "Sample_Data/mibi_prac/output/export AIannotated.json" `
-  -Topics "Sample_Data/mibi_prac/topic-tree.json" `
+  -InputPath "Sample_Data/mibi_prac/output/export AIannotated.json" `
+  -TopicsPath "Sample_Data/mibi_prac/topic-tree.json" `
   -Output "Sample_Data/mibi_prac/output/export AIannotated.hybrid-refined.json" `
   -ImagesZip "Sample_Data/mibi_prac/images.zip" `
   -KnowledgeZip "Sample_Data/mibi_prac/knowledge.zip" `
