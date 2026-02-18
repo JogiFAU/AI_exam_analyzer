@@ -267,6 +267,18 @@ def process_questions(
         knowledge_base=knowledge_base,
         text_similarity_threshold=float(args.text_cluster_similarity),
     )
+
+    # Refresh cluster IDs in existing aiAudit payloads so clustering can be retuned
+    # without rerunning the full Pass-A/Pass-B pipeline.
+    question_to_image_clusters = ((dataset_context.image_clusters.get("questionImageClusters") or {}).get("questionToClusters") or {})
+    for q in questions:
+        audit = q.get("aiAudit")
+        if not isinstance(audit, dict):
+            continue
+        qid = str(q.get("id") or "")
+        clusters = audit.setdefault("clusters", {})
+        clusters["questionContentClusterId"] = dataset_context.text_clusters["questionToCluster"].get(qid)
+        clusters["questionImageClusterIds"] = question_to_image_clusters.get(qid, [])
     emit_progress(
         event="dataset_context_finished",
         stage="preprocessing",
@@ -1202,6 +1214,18 @@ def process_questions(
         total=total_questions,
         message=f"Schreibe Ausgabe nach {args.output}.",
     )
+    abstraction_clusters = cluster_abstractions(
+        questions,
+        threshold=float(args.abstraction_cluster_similarity),
+    )
+    for q in questions:
+        qid = str(q.get("id") or "")
+        audit = q.get("aiAudit")
+        if not isinstance(audit, dict):
+            continue
+        audit.setdefault("clusters", {})
+        audit["clusters"]["abstractionClusterId"] = abstraction_clusters["questionToAbstractionCluster"].get(qid)
+
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
     emit_progress(
@@ -1263,6 +1287,16 @@ def rerun_postprocessing_from_output(
         knowledge_base=knowledge_base,
         text_similarity_threshold=float(args.text_cluster_similarity),
     )
+
+    question_to_image_clusters = ((dataset_context.image_clusters.get("questionImageClusters") or {}).get("questionToClusters") or {})
+    for q in questions:
+        audit = q.get("aiAudit")
+        if not isinstance(audit, dict):
+            continue
+        qid = str(q.get("id") or "")
+        clusters = audit.setdefault("clusters", {})
+        clusters["questionContentClusterId"] = dataset_context.text_clusters["questionToCluster"].get(qid)
+        clusters["questionImageClusterIds"] = question_to_image_clusters.get(qid, [])
 
     review_done = 0
     reconstruction_done = 0
@@ -1407,6 +1441,18 @@ def rerun_postprocessing_from_output(
         if args.checkpoint_every and i % args.checkpoint_every == 0:
             out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
             save_json(args.output, out_obj)
+
+    abstraction_clusters = cluster_abstractions(
+        questions,
+        threshold=float(args.abstraction_cluster_similarity),
+    )
+    for q in questions:
+        qid = str(q.get("id") or "")
+        audit = q.get("aiAudit")
+        if not isinstance(audit, dict):
+            continue
+        audit.setdefault("clusters", {})
+        audit["clusters"]["abstractionClusterId"] = abstraction_clusters["questionToAbstractionCluster"].get(qid)
 
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
