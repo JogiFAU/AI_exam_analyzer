@@ -53,16 +53,43 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Has-Text([string]$Value) {
+    return -not [string]::IsNullOrWhiteSpace($Value)
+}
+
+if ($null -eq $Input) { $Input = "" }
+if ($null -eq $Topics) { $Topics = "" }
+if ($null -eq $Output) { $Output = "" }
+if ($null -eq $ImagesZip) { $ImagesZip = "" }
+if ($null -eq $KnowledgeZip) { $KnowledgeZip = "" }
+if ($null -eq $KnowledgeIndex) { $KnowledgeIndex = "" }
+if ($null -eq $PythonExe) { $PythonExe = "python" }
+
+$Input = $Input.Trim()
+$Topics = $Topics.Trim()
+$Output = $Output.Trim()
+$ImagesZip = $ImagesZip.Trim()
+$KnowledgeZip = $KnowledgeZip.Trim()
+$KnowledgeIndex = $KnowledgeIndex.Trim()
+$PythonExe = $PythonExe.Trim()
+
+if (-not (Has-Text $Input)) {
+    throw "Input darf nicht leer sein."
+}
+if (-not (Has-Text $Topics)) {
+    throw "Topics darf nicht leer sein."
+}
+
 if (-not (Test-Path -LiteralPath $Input)) {
     throw "Input-Datei nicht gefunden: $Input"
 }
 if (-not (Test-Path -LiteralPath $Topics)) {
     throw "Topic-Datei nicht gefunden: $Topics"
 }
-if ($ImagesZip -ne "" -and -not (Test-Path -LiteralPath $ImagesZip)) {
+if ((Has-Text $ImagesZip) -and -not (Test-Path -LiteralPath $ImagesZip)) {
     throw "ImagesZip-Datei nicht gefunden: $ImagesZip"
 }
-if ($KnowledgeZip -ne "" -and -not (Test-Path -LiteralPath $KnowledgeZip)) {
+if ((Has-Text $KnowledgeZip) -and -not (Test-Path -LiteralPath $KnowledgeZip)) {
     throw "KnowledgeZip-Datei nicht gefunden: $KnowledgeZip"
 }
 
@@ -80,16 +107,16 @@ $args = @(
     "--abstraction-cluster-similarity", $AbstractionClusterSimilarity
 )
 
-if ($Output -ne "") {
+if (Has-Text $Output) {
     $args += @("--output", $Output)
 }
-if ($ImagesZip -ne "") {
+if (Has-Text $ImagesZip) {
     $args += @("--images-zip", $ImagesZip)
 }
-if ($KnowledgeZip -ne "") {
+if (Has-Text $KnowledgeZip) {
     $args += @("--knowledge-zip", $KnowledgeZip)
 }
-if ($KnowledgeIndex -ne "") {
+if (Has-Text $KnowledgeIndex) {
     $args += @("--knowledge-index", $KnowledgeIndex)
 }
 if ($EnableReviewPass) {
