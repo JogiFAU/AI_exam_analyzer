@@ -107,7 +107,9 @@ Wenn Knowledge aktiviert ist:
 
 ## 4.1 Pass A (immer)
 
-Pass A erhält Fragepayload + optionale Bilder und muss im Schema liefern:
+Pass A erhält Fragepayload + optionale Bilder. Zusätzlich kann das Preprocessing deterministische `topicCandidates` (Top-k) beilegen, um die Topic-Auswahl zu begrenzen.
+
+Pass A muss im Schema liefern:
 - `topic_initial` (nur aus Frage + Antworten),
 - `answer_review` (Plausibilität + Änderungsvorschlag + Evidenz-IDs),
 - `maintenance`,

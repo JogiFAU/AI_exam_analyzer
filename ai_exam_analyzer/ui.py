@@ -620,6 +620,7 @@ def main() -> None:
             container=container,
             key_map=key_map,
             topic_catalog_text=topic_catalog_text,
+            topic_catalog=catalog,
             schema_a=schema_a,
             schema_b=schema_b,
             schema_review=schema_review,

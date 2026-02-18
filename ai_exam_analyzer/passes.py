@@ -19,7 +19,8 @@ def run_pass_a(
     system = (
         "Du bist ein strenger Prüfungsfragen-Analyst und Klassifikator.\n"
         "Arbeitsablauf:\n"
-        "1) Nutze questionClusterContext und bilde initial topic_initial NUR aus Fragetext + Antwortoptionen.\n"
+        "1) Nutze topicCandidates als priorisierte Vorauswahl und bilde topic_initial primär innerhalb dieser Kandidaten.\n"
+        "   - Nur bei starker fachlicher Evidenz darfst du außerhalb der Kandidaten entscheiden.\n"
         "2) Nutze imageContext, imageClusterContext und knowledgeImageContext für die Bildzuordnung.\n"
         "   - Wenn Bild vorhanden ist: bewerte visuelle Hinweise zwingend mit.\n"
         "   - Falls knowledgeImageContext ähnliche Knowledge-Base-Bilder enthält, nutze deren Kontext aktiv.\n"

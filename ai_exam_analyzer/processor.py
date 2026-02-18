@@ -13,6 +13,7 @@ from ai_exam_analyzer.payload import build_question_payload
 from ai_exam_analyzer.workflow_context import build_dataset_context, cluster_abstractions
 from ai_exam_analyzer.decision_policy import compose_confidence, should_apply_pass_b_change, should_run_review_pass
 from ai_exam_analyzer.preprocessing import compute_preprocessing_assessment
+from ai_exam_analyzer.topic_candidates import TopicCandidateIndex
 
 
 def _answer_external_indices(q: Dict[str, Any]) -> List[int]:
@@ -115,6 +116,7 @@ def process_questions(
     container: Optional[Dict[str, Any]],
     key_map: Dict[str, Dict[str, Any]],
     topic_catalog_text: str,
+    topic_catalog: Optional[List[Dict[str, Any]]] = None,
     schema_a: Dict[str, Any],
     schema_b: Dict[str, Any],
     schema_review: Dict[str, Any],
@@ -134,6 +136,16 @@ def process_questions(
     skipped = 0
     processed = 0
     total_questions = len(questions)
+
+    catalog_rows = topic_catalog or sorted(key_map.values(), key=lambda x: (x.get("superTopicId", 0), x.get("subtopicId", 0)))
+    topic_candidate_index = TopicCandidateIndex(catalog_rows) if catalog_rows else None
+
+    report: Dict[str, Any] = {
+        "totalQuestions": total_questions,
+        "preprocessing": {"runLlmFalse": 0, "allowAutoChangeFalse": 0, "forceManualReview": 0},
+        "passes": {"passBRan": 0, "reviewRan": 0},
+        "maintenanceReasons": {},
+    }
 
     def emit_progress(**payload: Any) -> None:
         if progress_callback is None:
@@ -177,6 +189,8 @@ def process_questions(
         external_indices = _answer_external_indices(q)
         current = _coerce_dataset_correct_indices(q.get("correctIndices") or [], external_indices)
         payload = build_question_payload(q, current_correct_indices=current)
+        if topic_candidate_index is not None:
+            payload["topicCandidates"] = topic_candidate_index.rank(q, top_k=max(1, int(getattr(args, "topic_candidate_top_k", 3))))
 
         question_images: List[Dict[str, Any]] = []
         image_context: Dict[str, Any] = {"imageZipConfigured": bool(image_store is not None)}
@@ -211,6 +225,13 @@ def process_questions(
         n_answers = len(answers)
         preprocessing = compute_preprocessing_assessment(q)
         pre_maintenance_reasons = preprocessing.get("reasons", [])
+        gates = preprocessing.get("gates") or {}
+        if not bool(gates.get("runLlm", True)):
+            report["preprocessing"]["runLlmFalse"] += 1
+        if not bool(gates.get("allowAutoChange", True)):
+            report["preprocessing"]["allowAutoChangeFalse"] += 1
+        if bool(gates.get("forceManualReview", False)):
+            report["preprocessing"]["forceManualReview"] += 1
 
         audit: Dict[str, Any] = {
             "pipelineVersion": PIPELINE_VERSION,
@@ -344,6 +365,7 @@ def process_questions(
                         question_images=question_images,
                     )
                     audit["models"]["passB"] = args.passB_model
+                    report["passes"]["passBRan"] += 1
 
                     m_b = pass_b["maintenance"]
                     merged_reasons = list(dict.fromkeys(merged_reasons + (m_b.get("reasons") or [])))
@@ -410,6 +432,7 @@ def process_questions(
 
                 except Exception as e:
                     audit["models"]["passB"] = args.passB_model
+                    report["passes"]["passBRan"] += 1
                     verification = {"ran": True, "model": args.passB_model, "error": str(e)}
                     maintenance = {
                         "needsMaintenance": bool(maintenance.get("needsMaintenance")),
@@ -518,6 +541,7 @@ def process_questions(
                         question_images=question_images,
                     )
                     audit["models"]["review"] = args.review_model
+                    report["passes"]["reviewRan"] += 1
                     review_indices = normalize_indices(
                         review.get("finalCorrectIndices", []),
                         n_answers,
@@ -541,6 +565,7 @@ def process_questions(
                         audit["maintenance"]["reasons"] = list(dict.fromkeys((audit["maintenance"].get("reasons") or []) + ["review_pass_manual_review"]))
                 except Exception as review_exc:
                     audit["models"]["review"] = args.review_model
+                    report["passes"]["reviewRan"] += 1
                     audit["reviewPass"] = {"error": str(review_exc)}
 
             if args.debug:
@@ -561,6 +586,8 @@ def process_questions(
             audit["error"] = str(e)
 
         q["aiAudit"] = audit
+        for reason in (((audit.get("maintenance") or {}).get("reasons") or [])):
+            report["maintenanceReasons"][reason] = int(report["maintenanceReasons"].get(reason, 0)) + 1
 
         processed += 1
         emit_progress(
@@ -604,6 +631,14 @@ def process_questions(
 
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
+
+    run_report_path = (getattr(args, "run_report", "") or "").strip()
+    if run_report_path:
+        report["processed"] = processed
+        report["done"] = done
+        report["skipped"] = skipped
+        save_json(run_report_path, report)
+
     print(f"Finished. processed={processed} done={done} skipped={skipped}. Output: {args.output}")
     emit_progress(
         event="finished",

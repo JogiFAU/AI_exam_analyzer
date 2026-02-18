@@ -86,6 +86,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--review-model", default=CONFIG["REVIEW_MODEL"])
     ap.add_argument("--review-min-maintenance-severity", type=int, default=CONFIG["REVIEW_MIN_MAINTENANCE_SEVERITY"],
                     help="Run review pass only for maintenance severity >= this value")
+    ap.add_argument("--topic-candidate-top-k", type=int, default=CONFIG["TOPIC_CANDIDATE_TOP_K"],
+                    help="How many deterministic topic candidates to attach per question")
+    ap.add_argument("--run-report", default=CONFIG["RUN_REPORT_PATH"],
+                    help="Optional JSON path for workflow run metrics/report")
 
     ap.add_argument("--debug", dest="debug", action="store_true", default=CONFIG["DEBUG"],
                     help="Store raw pass outputs under aiAudit._debug")
@@ -179,6 +183,7 @@ def main() -> None:
         container=container,
         key_map=key_map,
         topic_catalog_text=topic_catalog_text,
+        topic_catalog=catalog,
         schema_a=schema_a,
         schema_b=schema_b,
         schema_review=schema_review,

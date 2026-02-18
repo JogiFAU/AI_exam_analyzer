@@ -32,6 +32,8 @@ CONFIG = {
     "ENABLE_REVIEW_PASS": False,
     "REVIEW_MODEL": "o4-mini",
     "REVIEW_MIN_MAINTENANCE_SEVERITY": 2,
+    "TOPIC_CANDIDATE_TOP_K": 3,
+    "RUN_REPORT_PATH": "",
 }
 
 PIPELINE_VERSION = "2pass-merged-v7-preprocessing-gates"
