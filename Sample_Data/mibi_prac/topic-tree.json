@@ -1,0 +1,57 @@
+{
+  "subject": "Medizinische Mikrobiologie",
+  "superTopics": [
+    {
+      "name": "Grundlagen & Labordiagnostik",
+      "subtopics": [
+        "Präanalytik",
+        "Mikroskopie",
+        "Kulturverfahren",
+        "Biochemische Differenzierung",
+        "Molekularbiologie (PCR)",
+        "Resistenztestung",
+        "Massenspektrometrie (MALDI-TOF)",
+        "Serologie"
+      ]
+    },
+    {
+      "name": "Klinische Bakteriologie",
+      "subtopics": [
+        "Wundinfektionen",
+        "Urogenitalinfektionen",
+        "Gastrointestinalinfektionen",
+        "Sepsis & Meningitis",
+        "Respiratorische Infekte / Tuberkulose"
+      ]
+    },
+    {
+      "name": "Virologie",
+      "subtopics": [
+        "Virushepatitis",
+        "HIV / Retroviren",
+        "Herpesviren",
+        "Respiratorische Viren",
+        "Kinderkrankheiten / Exantheme"
+      ]
+    },
+    {
+      "name": "Mykologie & Parasitologie",
+      "subtopics": [
+        "Sprosspilze (Hefen)",
+        "Fadenpilze (Schimmel)",
+        "Dermatophyten",
+        "Protozoen (Einzeller)",
+        "Helminthen (Würmer)"
+      ]
+    },
+    {
+      "name": "Hygiene & Spezielle Aspekte",
+      "subtopics": [
+        "Basishygiene / Desinfektion",
+        "Infektionsschutzgesetz / Meldewesen",
+        "Vakzinologie (Impfungen)",
+        "Schwangerschafts-Mikrobiologie"
+      ]
+    }
+  ]
+}
