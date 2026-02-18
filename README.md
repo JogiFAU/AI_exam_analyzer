@@ -268,6 +268,8 @@ Siehe `KNOWN_ISSUES.md`.
 --enable-repeat-reconstruction \
 --repeat-min-similarity 0.72 \
 --repeat-min-anchor-conf 0.82 \
+--repeat-min-anchor-consensus 1 \
+--repeat-min-match-ratio 0.60 \
 --auto-apply-repeat-reconstruction \
 --run-report workflow_report.json
 ```
@@ -278,7 +280,7 @@ Siehe `KNOWN_ISSUES.md`.
 
 `--enable-repeat-reconstruction` aktiviert die Erkennung wiederkehrender Fragen über verschiedene Klausurjahre mit Vorschlägen zur Rekonstruktion schwacher Items.
 
-`--repeat-min-similarity` und `--repeat-min-anchor-conf` steuern, wie streng Repeat-Cluster und High-Quality-Anker ausgewählt werden.
+`--repeat-min-similarity`, `--repeat-min-anchor-conf`, `--repeat-min-anchor-consensus` und `--repeat-min-match-ratio` steuern, wie streng Repeat-Cluster, Anchor-Konsens und Textüberlappung für Rekonstruktionsvorschläge bewertet werden.
 
 `--auto-apply-repeat-reconstruction` erlaubt automatisches Übernehmen der Rekonstruktionsvorschläge (nur wenn Preprocessing-Gates Auto-Änderungen erlauben).
 

@@ -107,6 +107,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Minimum similarity for repeat-pattern clustering")
     ap.add_argument("--repeat-min-anchor-conf", type=float, default=CONFIG["REPEAT_MIN_ANCHOR_CONF"],
                     help="Minimum combined confidence for high-quality repeat anchors")
+    ap.add_argument("--repeat-min-anchor-consensus", type=int, default=CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"],
+                    help="Minimum number of high-quality anchors that must vote for a correct answer text")
+    ap.add_argument("--repeat-min-match-ratio", type=float, default=CONFIG["REPEAT_MIN_MATCH_RATIO"],
+                    help="Minimum overlap ratio between anchor-correct texts and target answers")
 
     ap.add_argument("--debug", dest="debug", action="store_true", default=CONFIG["DEBUG"],
                     help="Store raw pass outputs under aiAudit._debug")

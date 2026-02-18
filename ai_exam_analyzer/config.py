@@ -39,6 +39,8 @@ CONFIG = {
     "AUTO_APPLY_REPEAT_RECONSTRUCTION": False,
     "REPEAT_MIN_SIMILARITY": 0.72,
     "REPEAT_MIN_ANCHOR_CONF": 0.82,
+    "REPEAT_MIN_ANCHOR_CONSENSUS": 1,
+    "REPEAT_MIN_MATCH_RATIO": 0.6,
 }
 
-PIPELINE_VERSION = "2pass-merged-v7-preprocessing-gates"
+PIPELINE_VERSION = "2pass-merged-v8-repeat-consensus-cluster-v2"

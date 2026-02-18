@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 
 @dataclass
@@ -14,6 +14,7 @@ class RepeatSuggestion:
     confidence: float
     suggested_correct_indices: List[int]
     matched_correct_texts: List[str]
+    consensus_count: int
 
 
 def _norm_text(text: str) -> str:
@@ -99,7 +100,7 @@ def _anchor_correct_texts(q: Dict[str, Any]) -> List[str]:
     if by_correct_answers:
         texts = [_norm_text(x.get("text", "")) for x in by_correct_answers if _norm_text(x.get("text", ""))]
         if texts:
-            return texts
+            return sorted(set(texts))
 
     texts: List[str] = []
     for a in q.get("answers") or []:
@@ -107,7 +108,7 @@ def _anchor_correct_texts(q: Dict[str, Any]) -> List[str]:
             t = _norm_text(a.get("text", ""))
             if t:
                 texts.append(t)
-    return texts
+    return sorted(set(texts))
 
 
 def _derive_external_indices(q: Dict[str, Any]) -> List[int]:
@@ -120,6 +121,15 @@ def _derive_external_indices(q: Dict[str, Any]) -> List[int]:
                 idx = value
                 break
         out.append(idx if idx is not None else (i + 1))
+    return out
+
+
+def _target_answer_text_set(q: Dict[str, Any]) -> Set[str]:
+    out: Set[str] = set()
+    for a in q.get("answers") or []:
+        t = _norm_text(a.get("text", ""))
+        if t:
+            out.add(t)
     return out
 
 
@@ -141,6 +151,8 @@ def compute_repeat_reconstruction(
     *,
     min_similarity: float,
     min_anchor_conf: float,
+    min_anchor_consensus: int,
+    min_match_ratio: float,
 ) -> Tuple[Dict[str, RepeatSuggestion], Dict[str, Any]]:
     """Return suggestions for low-quality repeated questions and summary metrics."""
     toks = [_tokenize(q) for q in questions]
@@ -156,6 +168,7 @@ def compute_repeat_reconstruction(
     qid_to_suggestion: Dict[str, RepeatSuggestion] = {}
     clusters_considered = 0
     clusters_cross_year = 0
+    low_quality_targets = 0
 
     for cluster_idx, members in enumerate(root_to_members.values(), start=1):
         if len(members) <= 1:
@@ -171,12 +184,20 @@ def compute_repeat_reconstruction(
         if not anchors:
             continue
 
-        anchors.sort(key=lambda idx: _question_conf(questions[idx]), reverse=True)
-        best_anchor_idx = anchors[0]
+        # gather anchor answer-text consensus
+        text_votes: Counter[str] = Counter()
+        best_anchor_idx = max(anchors, key=lambda idx: _question_conf(questions[idx]))
+        for idx in anchors:
+            for txt in _anchor_correct_texts(questions[idx]):
+                text_votes[txt] += 1
+
+        consensus_texts = sorted([t for t, c in text_votes.items() if c >= max(1, int(min_anchor_consensus))])
+        if not consensus_texts:
+            consensus_texts = _anchor_correct_texts(questions[best_anchor_idx])
+
         anchor_q = questions[best_anchor_idx]
         anchor_id = str(anchor_q.get("id") or "")
         anchor_conf = _question_conf(anchor_q)
-        anchor_texts = _anchor_correct_texts(anchor_q)
 
         for m in members:
             if m == best_anchor_idx:
@@ -190,8 +211,17 @@ def compute_repeat_reconstruction(
             target_low_quality = bool(maintenance.get("needsMaintenance")) or _question_conf(target) < min_anchor_conf
             if not target_low_quality:
                 continue
+            low_quality_targets += 1
 
-            suggested_indices = _map_anchor_texts_to_target_indices(target, anchor_texts)
+            target_texts = _target_answer_text_set(target)
+            if not target_texts:
+                continue
+            overlap = len(set(consensus_texts) & target_texts)
+            match_ratio = overlap / max(1, len(set(consensus_texts)))
+            if match_ratio < float(min_match_ratio):
+                continue
+
+            suggested_indices = _map_anchor_texts_to_target_indices(target, consensus_texts)
             if not suggested_indices:
                 continue
 
@@ -200,12 +230,14 @@ def compute_repeat_reconstruction(
                 anchor_question_id=anchor_id,
                 confidence=round(anchor_conf, 4),
                 suggested_correct_indices=suggested_indices,
-                matched_correct_texts=anchor_texts,
+                matched_correct_texts=consensus_texts,
+                consensus_count=max(text_votes.values()) if text_votes else 1,
             )
 
     summary = {
         "clustersConsidered": clusters_considered,
         "crossYearClusters": clusters_cross_year,
+        "lowQualityTargets": low_quality_targets,
         "suggestions": len(qid_to_suggestion),
     }
     return qid_to_suggestion, summary

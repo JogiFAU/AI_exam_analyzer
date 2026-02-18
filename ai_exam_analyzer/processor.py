@@ -149,7 +149,7 @@ def process_questions(
         "topicDrift": {"passAInitialVsFinal": 0},
         "autoChange": {"blockedByGate": 0},
         "maintenanceReasons": {},
-        "repeatReconstruction": {"clustersConsidered": 0, "crossYearClusters": 0, "suggestions": 0, "autoApplied": 0},
+        "repeatReconstruction": {"clustersConsidered": 0, "crossYearClusters": 0, "lowQualityTargets": 0, "suggestions": 0, "autoApplied": 0, "blockedByGate": 0},
     }
 
     def emit_progress(**payload: Any) -> None:
@@ -662,6 +662,8 @@ def process_questions(
             questions,
             min_similarity=float(getattr(args, "repeat_min_similarity", 0.72)),
             min_anchor_conf=float(getattr(args, "repeat_min_anchor_conf", 0.82)),
+            min_anchor_consensus=max(1, int(getattr(args, "repeat_min_anchor_consensus", 1))),
+            min_match_ratio=float(getattr(args, "repeat_min_match_ratio", 0.6)),
         )
         report["repeatReconstruction"].update(repeat_summary)
 
@@ -678,6 +680,7 @@ def process_questions(
                 "clusterId": suggestion.cluster_id,
                 "anchorQuestionId": suggestion.anchor_question_id,
                 "anchorConfidence": suggestion.confidence,
+                "consensusCount": suggestion.consensus_count,
                 "suggestedCorrectIndices": suggestion.suggested_correct_indices,
                 "matchedCorrectTexts": suggestion.matched_correct_texts,
             }
@@ -694,6 +697,8 @@ def process_questions(
                             ap["changedInDataset"] = True
                             ap["changeSource"] = "repeat_reconstruction"
                         report["repeatReconstruction"]["autoApplied"] += 1
+                else:
+                    report["repeatReconstruction"]["blockedByGate"] += 1
 
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)

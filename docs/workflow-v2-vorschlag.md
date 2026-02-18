@@ -90,7 +90,7 @@ Diese Metriken dienen als „Regler“, um Schwellen je Fach iterativ zu kalibri
 ### Nächste Prioritäten (konkret)
 1. **Repeat-Reconstruction (automatisierte Verbesserung) stabilisieren**
    - High-Quality-Anker über Jahre erkennen und auf Maintenance-Items übertragen.
-   - Auto-Apply nur bei sauberem Text-Matching + erlaubten Gates, sonst Suggestion-only.
+   - Auto-Apply nur bei Anchor-Konsens + ausreichend Textüberlappung + erlaubten Gates, sonst Suggestion-only.
 
 2. **Run-Report weiter kalibrieren**
    - Präzisions-Proxy für Repeat-Rekonstruktionen (später durch Review bestätigt?).

@@ -512,6 +512,8 @@ def _build_args() -> SimpleNamespace:
         auto_apply_repeat_reconstruction=bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"]),
         repeat_min_similarity=float(CONFIG["REPEAT_MIN_SIMILARITY"]),
         repeat_min_anchor_conf=float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]),
+        repeat_min_anchor_consensus=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]),
+        repeat_min_match_ratio=float(CONFIG["REPEAT_MIN_MATCH_RATIO"]),
     )
 
 
