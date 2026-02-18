@@ -17,14 +17,22 @@ def build_topic_catalog(topic_tree: Dict[str, Any]) -> Tuple[List[Dict[str, Any]
         subs = st.get("subtopics") or []
         if not isinstance(subs, list) or not subs:
             raise ValueError(f"SuperTopic '{super_name}' must have non-empty 'subtopics' list.")
-        for sub_idx, sub_name in enumerate(subs, start=1):
-            sub_name = (sub_name or "").strip()
+        for sub_idx, sub in enumerate(subs, start=1):
+            aliases: List[str] = []
+            if isinstance(sub, dict):
+                sub_name = (sub.get("name") or "").strip()
+                raw_aliases = sub.get("aliases") or []
+                if isinstance(raw_aliases, list):
+                    aliases = [str(x).strip() for x in raw_aliases if str(x).strip()]
+            else:
+                sub_name = (sub or "").strip()
             topic_key = f"{s_idx}:{sub_idx}"
             row = {
                 "superTopicId": s_idx,
                 "superTopicName": super_name,
                 "subtopicId": sub_idx,
                 "subtopicName": sub_name,
+                "aliases": aliases,
                 "topicKey": topic_key,
             }
             catalog.append(row)

@@ -90,6 +90,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="How many deterministic topic candidates to attach per question")
     ap.add_argument("--run-report", default=CONFIG["RUN_REPORT_PATH"],
                     help="Optional JSON path for workflow run metrics/report")
+    ap.add_argument("--topic-candidate-outside-force-passb-conf", type=float,
+                    default=CONFIG["TOPIC_CANDIDATE_OUTSIDE_FORCE_PASSB_CONF"],
+                    help="Run Pass B when Pass A picks topic outside candidates below this confidence")
 
     ap.add_argument("--debug", dest="debug", action="store_true", default=CONFIG["DEBUG"],
                     help="Store raw pass outputs under aiAudit._debug")

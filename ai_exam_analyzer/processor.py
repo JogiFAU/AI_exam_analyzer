@@ -143,7 +143,10 @@ def process_questions(
     report: Dict[str, Any] = {
         "totalQuestions": total_questions,
         "preprocessing": {"runLlmFalse": 0, "allowAutoChangeFalse": 0, "forceManualReview": 0},
+        "topicCandidates": {"questionsWithCandidates": 0, "passAOutsideCandidates": 0, "finalOutsideCandidates": 0, "passBTriggeredByCandidateConflict": 0},
         "passes": {"passBRan": 0, "reviewRan": 0},
+        "topicDrift": {"passAInitialVsFinal": 0},
+        "autoChange": {"blockedByGate": 0},
         "maintenanceReasons": {},
     }
 
@@ -191,6 +194,8 @@ def process_questions(
         payload = build_question_payload(q, current_correct_indices=current)
         if topic_candidate_index is not None:
             payload["topicCandidates"] = topic_candidate_index.rank(q, top_k=max(1, int(getattr(args, "topic_candidate_top_k", 3))))
+            if payload.get("topicCandidates"):
+                report["topicCandidates"]["questionsWithCandidates"] += 1
 
         question_images: List[Dict[str, Any]] = []
         image_context: Dict[str, Any] = {"imageZipConfigured": bool(image_store is not None)}
@@ -340,7 +345,19 @@ def process_questions(
             verification: Dict[str, Any] = {"ran": False}
             verifier_agreed: Optional[bool] = None
 
-            ran_b = should_run_pass_b(pass_a, args.trigger_answer_conf, args.trigger_topic_conf)
+            candidate_keys = {str(x.get("topicKey")) for x in (payload.get("topicCandidates") or []) if x.get("topicKey")}
+            pass_a_topic_key = str(pass_a["topic_final"].get("topicKey") or "")
+            pass_a_topic_conf = float(pass_a["topic_final"].get("confidence", 0.0))
+            candidate_conflict = bool(candidate_keys) and pass_a_topic_key not in candidate_keys
+            if candidate_conflict:
+                report["topicCandidates"]["passAOutsideCandidates"] += 1
+
+            ran_b_base = should_run_pass_b(pass_a, args.trigger_answer_conf, args.trigger_topic_conf)
+            candidate_force_b = candidate_conflict and pass_a_topic_conf < float(getattr(args, "topic_candidate_outside_force_passb_conf", 0.92))
+            ran_b = bool(ran_b_base or candidate_force_b)
+            if candidate_force_b:
+                report["topicCandidates"]["passBTriggeredByCandidateConflict"] += 1
+
             pass_b: Optional[Dict[str, Any]] = None
 
             if ran_b:
@@ -399,6 +416,10 @@ def process_questions(
 
                     verifier_agreed = agree and (not cannot)
 
+                    allow_auto_change_gate = bool((preprocessing.get("gates") or {}).get("allowAutoChange", True))
+                    if (not allow_auto_change_gate) and agree and (not cannot) and verified and verified != current:
+                        report["autoChange"]["blockedByGate"] += 1
+
                     if should_apply_pass_b_change(
                         current_indices=current,
                         verified_indices=verified,
@@ -408,7 +429,7 @@ def process_questions(
                         apply_min_conf_b=args.apply_change_min_conf_b,
                         retrieval_quality=retrieval_quality,
                         evidence_count=len(evidence_chunks),
-                        allow_auto_change=bool((preprocessing.get("gates") or {}).get("allowAutoChange", True)),
+                        allow_auto_change=allow_auto_change_gate,
                     ):
                         apply_correct_indices(q, verified)
                         will_change = True
@@ -521,6 +542,11 @@ def process_questions(
                     "summary": (pass_a.get("question_abstraction") or {}).get("summary", ""),
                 },
             })
+
+            if pass_a["topic_initial"]["topicKey"] != final_topic_key:
+                report["topicDrift"]["passAInitialVsFinal"] += 1
+            if candidate_keys and final_topic_key not in candidate_keys:
+                report["topicCandidates"]["finalOutsideCandidates"] += 1
 
             force_manual_review = bool((preprocessing.get("gates") or {}).get("forceManualReview", False))
             if force_manual_review or should_run_review_pass(

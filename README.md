@@ -264,12 +264,15 @@ Siehe `KNOWN_ISSUES.md`.
 --review-model o4-mini \
 --review-min-maintenance-severity 2 \
 --topic-candidate-top-k 3 \
+--topic-candidate-outside-force-passb-conf 0.92 \
 --run-report workflow_report.json
 ```
 
 `--topic-candidate-top-k` steuert, wie viele deterministische Topic-Kandidaten vor Pass A in den Payload aufgenommen werden.
 
-`--run-report` schreibt einen JSON-Laufbericht (u. a. Preprocessing-Gates, Pass-B/Review-Häufigkeiten, Maintenance-Grundverteilung) für die nachgelagerte Kalibrierung.
+`--topic-candidate-outside-force-passb-conf` erzwingt Pass B, wenn Pass A trotz Kandidatenfilter ein Topic außerhalb der Top-k vorschlägt und die Topic-Confidence unter der Schwelle liegt.
+
+`--run-report` schreibt einen JSON-Laufbericht (u. a. Preprocessing-Gates, Candidate-Konflikte, Topic-Drift, blockierte Auto-Changes, Pass-B/Review-Häufigkeiten, Maintenance-Grundverteilung) für die nachgelagerte Kalibrierung.
 
 
 **Hinweis V5:**

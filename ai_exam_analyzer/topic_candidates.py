@@ -7,11 +7,14 @@ from collections import Counter, defaultdict
 from typing import Any, Dict, List, Set
 
 
+STOPWORDS = {"und", "oder", "der", "die", "das", "mit", "von", "für", "bei", "auf", "im", "in", "zu"}
+
+
 def _tokenize(text: str) -> List[str]:
     tokens: List[str] = []
     for raw in (text or "").lower().replace("\n", " ").split():
         token = "".join(ch for ch in raw if ch.isalnum() or ch in "äöüß")
-        if len(token) >= 3:
+        if len(token) >= 3 and token not in STOPWORDS:
             tokens.append(token)
     return tokens
 
@@ -25,7 +28,8 @@ class TopicCandidateIndex:
 
     def _build(self) -> None:
         for row in self.catalog:
-            text = f"{row.get('superTopicName','')} {row.get('subtopicName','')}"
+            aliases = " ".join(row.get("aliases") or [])
+            text = f"{row.get('superTopicName','')} {row.get('subtopicName','')} {aliases}"
             toks = _tokenize(text)
             counts = Counter(toks)
             key = str(row.get("topicKey") or "")
@@ -67,4 +71,8 @@ class TopicCandidateIndex:
             })
 
         scored.sort(key=lambda x: x["score"], reverse=True)
-        return scored[: max(1, int(top_k))]
+        top = scored[: max(1, int(top_k))]
+        max_score = top[0]["score"] if top else 0.0
+        for row in top:
+            row["relativeScore"] = round((row["score"] / max_score), 4) if max_score > 0 else 0.0
+        return top

@@ -84,7 +84,7 @@ Diese Metriken dienen als „Regler“, um Schwellen je Fach iterativ zu kalibri
 
 ### Bereits umgesetzt
 - [x] **Phase 1 (teilweise):** strukturierte Preprocessing-Gates inkl. `runLlm`, `allowAutoChange`, `forceManualReview` und `qualityScore`.
-- [x] **Phase 2 (teilweise):** deterministische `topicCandidates` (Top-k) werden je Frage in den Payload gelegt.
+- [x] **Phase 2 (weitgehend):** deterministische `topicCandidates` (Top-k) werden je Frage in den Payload gelegt; Candidate-Konflikte können Pass B zusätzlich triggern.
 - [x] **Phase 5 (teilweise):** optionaler Run-Report (`--run-report`) mit Gate-/Pass- und Maintenance-Grundverteilungen.
 
 ### Nächste Prioritäten (konkret)
@@ -92,14 +92,11 @@ Diese Metriken dienen als „Regler“, um Schwellen je Fach iterativ zu kalibri
    - Alias-/Synonymliste pro Fach einführen (z. B. Abkürzungen, Schreibvarianten).
    - Kandidaten-Scoring mit Tokentypen (Entity-Tokens höher gewichten).
 
-2. **Pass-B Trigger um Candidate-Konflikte erweitern**
-   - Verifikation erzwingen, wenn `topic_final` außerhalb Top-k liegt und Confidence nicht hoch genug ist.
-
-3. **Run-Report ausbauen (kalibrierbar machen)**
+2. **Run-Report ausbauen (kalibrierbar machen)**
    - Topic-Drift-Metrik (`topicInitial` vs `topicFinal` vs `review`).
    - Anteil blockierter Auto-Changes je Reason-Klasse.
 
-4. **Clustering V2 umsetzen**
+3. **Clustering V2 umsetzen**
    - Retrieval-Top-k + Re-Ranking + Merge-Gates statt reinem globalen Jaccard-Union-Find.
    - Cluster-Qualitätsflags (`cohesion`, `bridge_score`) direkt im Audit speichern.
 
