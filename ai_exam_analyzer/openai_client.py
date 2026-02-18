@@ -1,6 +1,7 @@
 """OpenAI API helpers."""
 
 import json
+import time
 from typing import Any, Dict, List, Optional, Union
 
 
@@ -21,8 +22,9 @@ def call_json_schema(
     temperature: Optional[float] = None,
     reasoning_effort: Optional[str] = None,
     max_output_tokens: int = 900,
+    max_retries: int = 2,
 ) -> Dict[str, Any]:
-    """Responses API + Structured Outputs (json_schema). Handles temperature for reasoning models."""
+    """Responses API + Structured Outputs (json_schema) with retry/fallback handling."""
 
     def _extract_output_text(resp: Any) -> str:
         text = getattr(resp, "output_text", None)
@@ -36,7 +38,6 @@ def call_json_schema(
         parts: List[str] = []
         for item in output:
             if not isinstance(item, dict):
-                # pydantic-like models may expose dict conversion.
                 item = item.model_dump() if hasattr(item, "model_dump") else {}
             for content in item.get("content", []) or []:
                 if not isinstance(content, dict):
@@ -49,7 +50,7 @@ def call_json_schema(
             raise RuntimeError("Responses API returned no parseable text output.")
         return merged
 
-    def _do_call(send_temperature: bool) -> Dict[str, Any]:
+    def _single_call(send_temperature: bool, tokens: int) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "model": model,
             "input": [
@@ -64,7 +65,7 @@ def call_json_schema(
                     "strict": True,
                 }
             },
-            "max_output_tokens": max_output_tokens,
+            "max_output_tokens": tokens,
         }
 
         if send_temperature and temperature is not None:
@@ -74,17 +75,54 @@ def call_json_schema(
             params["reasoning"] = {"effort": reasoning_effort}
 
         resp = client.responses.create(**params)
-        if resp.status != "completed":
-            raise RuntimeError(f"Response not completed: {resp.status}")
+        status = str(getattr(resp, "status", ""))
+        if status != "completed":
+            details = getattr(resp, "incomplete_details", None)
+            reason = None
+            if isinstance(details, dict):
+                reason = details.get("reason")
+            elif hasattr(details, "model_dump"):
+                reason = details.model_dump().get("reason")
+            suffix = f" (reason={reason})" if reason else ""
+            raise RuntimeError(f"Response not completed: {status}{suffix}")
         return json.loads(_extract_output_text(resp))
 
+    def _call_with_retries(send_temperature: bool) -> Dict[str, Any]:
+        current_tokens = max(256, int(max_output_tokens))
+        last_error: Optional[Exception] = None
+
+        for attempt in range(max(0, int(max_retries)) + 1):
+            try:
+                return _single_call(send_temperature=send_temperature, tokens=current_tokens)
+            except Exception as exc:  # keep broad: API/network/serialization variants
+                msg = str(exc)
+                last_error = exc
+
+                is_retryable = (
+                    "Response not completed: incomplete" in msg
+                    or "timed out" in msg.lower()
+                    or "rate limit" in msg.lower()
+                    or "temporarily unavailable" in msg.lower()
+                )
+                if attempt >= max_retries or not is_retryable:
+                    break
+
+                # for incomplete outputs, raise available output budget on retry
+                if "Response not completed: incomplete" in msg:
+                    current_tokens = min(4000, int(current_tokens * 1.6) + 128)
+                time.sleep(0.35 * (attempt + 1))
+
+        if last_error is None:
+            raise RuntimeError("Unknown Responses API failure.")
+        raise last_error
+
     if is_reasoning_model(model):
-        return _do_call(send_temperature=False)
+        return _call_with_retries(send_temperature=False)
 
     try:
-        return _do_call(send_temperature=True)
+        return _call_with_retries(send_temperature=True)
     except Exception as e:
         msg = str(e)
         if "temperature" in msg and ("Unsupported parameter" in msg or "not supported" in msg):
-            return _do_call(send_temperature=False)
+            return _call_with_retries(send_temperature=False)
         raise
