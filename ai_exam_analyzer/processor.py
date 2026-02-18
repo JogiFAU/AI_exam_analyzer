@@ -64,6 +64,20 @@ def _coerce_dataset_correct_indices(raw_indices: List[int], external_indices: Li
 
     return sorted({i for i in cleaned if i in ext_set})
 
+def _topic_row_for_key(key_map: Dict[str, Dict[str, Any]], topic_key: Any) -> Dict[str, Any]:
+    key = str(topic_key or "")
+    row = key_map.get(key)
+    if row is not None:
+        return row
+    fallback = next(iter(key_map.values()), None)
+    if fallback is None:
+        raise RuntimeError("Topic catalog is empty; cannot map topic keys.")
+    return {
+        **fallback,
+        "superTopicName": "UNKNOWN_TOPIC",
+        "subtopicName": key or "UNKNOWN_TOPIC",
+    }
+
 
 def _build_output_obj(
     *,
@@ -495,8 +509,8 @@ def process_questions(
                 maintenance["severity"] = max(int(maintenance.get("severity", 1)), 3)
                 maintenance["reasons"] = list(dict.fromkeys((maintenance.get("reasons") or []) + ["preprocessing_force_manual_review"]))
 
-            init_row = key_map[pass_a["topic_initial"]["topicKey"]]
-            final_row = key_map[final_topic_key]
+            init_row = _topic_row_for_key(key_map, pass_a["topic_initial"].get("topicKey"))
+            final_row = _topic_row_for_key(key_map, final_topic_key)
             compact_evidence = _compact_evidence(evidence_chunks)
 
             audit.update({
@@ -580,7 +594,7 @@ def process_questions(
                         audit["answerPlausibility"]["finalCorrectIndices"] = review_indices
                     topic_key_review = review.get("finalTopicKey")
                     if topic_key_review in key_map:
-                        topic_row_review = key_map[topic_key_review]
+                        topic_row_review = _topic_row_for_key(key_map, topic_key_review)
                         audit["topicFinal"]["superTopic"] = topic_row_review["superTopicName"]
                         audit["topicFinal"]["subtopic"] = topic_row_review["subtopicName"]
                         audit["topicFinal"]["source"] = "review"
