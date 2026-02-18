@@ -63,3 +63,41 @@ Ja, es sind **gezielte Robustheits-Anpassungen** sinnvoll:
 2. **P1:** Stabilisierung `reconstruction`-Pass (da hohe Fehlerquote).
 3. **P2:** Stabilisierung/Transparenz `reviewPass` (fehlend/Fehler klar unterscheiden).
 4. **P3:** Maintenance-Semantik und Debug-Portabilität konsolidieren.
+
+## Weitere Unstimmigkeiten / Qualitäts-Signale
+
+### 5) Optional-Pässe sind stark asymmetrisch erfolgreich
+- `reconstruction` ist nur bei **57** Fragen erfolgreich und bei **98** Fragen im Fehlerzustand.
+- `reviewPass` ist bei **95** Fragen gar nicht vorhanden, bei **25** fehlerhaft und nur bei **35** erfolgreich.
+- Das spricht für ein robustes Kern-Processing, aber fragile optionale Post-Processing-Pässe.
+
+### 6) Confidence-/Quelle-Verteilung wirkt unausgewogen
+- `finalAnswerConfidenceSource` stammt fast immer aus `passA` (**152/155**), nur in **2** Fällen aus `passB`.
+- `topicFinal.source` ist ebenfalls stark auf frühe Schritte konzentriert (`passA`: **118**, `review`: **35**, `passB`: **1**).
+- Das ist nicht zwingend ein Bug, kann aber auf begrenzten Zusatznutzen der späteren Korrektur-Pässe hindeuten.
+
+### 7) Retrieval-Qualitätswert wirkt wenig trennscharf
+- `retrievalQuality` liegt für alle Fragen sehr hoch im engen Bereich (**0.9319–1.0**).
+- Falls dieser Wert als Entscheidungsgrundlage genutzt wird, sollte geprüft werden, ob die Metrik ausreichend zwischen guten/schwachen Retrieval-Treffern differenziert.
+
+### 8) Einzelfall ohne finale Antwort-Indizes
+- Es gibt genau **einen** Eintrag ohne `finalAiCorrectIndices` (korrespondierend zum globalen Fehlerfall).
+- Für Downstream-Verarbeitung ist das ok, sofern `status=error` sauber abgefangen wird; sonst sollte ein expliziter Fallbackwert gesetzt werden.
+
+### 9) Positiver Konsistenzcheck
+- Keine doppelten Frage-IDs gefunden.
+- Top-Level-Felder (`aiSuperTopic`, `aiSubtopic`, `aiTopicConfidence`, Maintenance-Felder) sind konsistent zu den jeweiligen `aiAudit`-Feldern.
+- `correctIndices` und `correctAnswers` sind untereinander konsistent.
+
+## Ergänzte Handlungsempfehlungen
+6. **Monitoring für optionale Pass-Erfolgsraten einführen**
+   - Separate KPIs für `reviewPass` und `reconstruction` (success/error/missing) pro Lauf.
+   - Zielwerte definieren und bei Regression automatisch warnen.
+
+7. **Nutzwertanalyse von Pass-B/Review quantifizieren**
+   - Metriken: Wie oft ändern sich `finalCorrectIndices`/`topicFinal` tatsächlich und mit welchem Qualitätsgewinn?
+   - Falls selten wirksam, Prompt-/Trigger-Logik gezielt nachschärfen.
+
+8. **Retrieval-Quality-Metrik kalibrieren**
+   - Prüfen, ob die aktuelle Skala zu eng ist.
+   - Gegebenenfalls zusätzliche Signale ergänzen (z. B. Evidenzabdeckung, Widerspruchssignale, Quellenvielfalt).
