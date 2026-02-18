@@ -218,3 +218,17 @@ def schema_explainer_pass() -> Dict[str, Any]:
         "required": ["summary", "correctnessExplanation", "wrongOptionExplanations", "contextualization"],
         "additionalProperties": False,
     }
+
+
+def schema_abstraction_cluster_refinement() -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "removeQuestionIds": {"type": "array", "items": {"type": "string"}},
+            "mergeIntoClusterId": {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "reason": {"type": "string"},
+        },
+        "required": ["removeQuestionIds", "mergeIntoClusterId", "confidence", "reason"],
+        "additionalProperties": False,
+    }

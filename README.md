@@ -183,6 +183,65 @@ python classify_topics_merged_config_fixed.py \
   --images-zip images.zip
 ```
 
+
+## Nur Cluster erneut berechnen (PowerShell CLI)
+
+Wenn du einen bestehenden Datensatz (z. B. `.../export AIannotated.json`) **ohne neue Modell-Calls** nur neu clustern willst, gibt es jetzt ein PowerShell-Skript mit absichtlich etwas lockereren Defaults:
+
+- `text-cluster-similarity`: **0.12** (statt 0.15)
+- `abstraction-cluster-similarity`: **0.18** (statt 0.22)
+
+Beispiel:
+
+```powershell
+./rerun-clustering.ps1 `
+  -Input "Sample_Data/mibi_prac/output/export AIannotated.json" `
+  -Output "Sample_Data/mibi_prac/output/export AIannotated.reclustered.json" `
+  -TextClusterSimilarity 0.12 `
+  -AbstractionClusterSimilarity 0.18
+```
+
+Optional mit Bildern (für `questionImageClusterIds`):
+
+```powershell
+./rerun-clustering.ps1 `
+  -Input "Sample_Data/mibi_prac/output/export AIannotated.json" `
+  -Output "Sample_Data/mibi_prac/output/export AIannotated.reclustered.json" `
+  -ImagesZip "Sample_Data/mibi_prac/images.zip"
+```
+
+Hinweis: Das Skript ruft intern `python -m ai_exam_analyzer.recluster_only` auf und aktualisiert nur `aiAudit.clusters` (plus `meta.clusteringRerun` im Container).
+Optionales Hybrid-Design mit LLM (für Abstraction-Cluster-Qualität):
+- `--enable-llm-abstraction-cluster-refinement`
+- `--cluster-refinement-model o4-mini`
+- `--cluster-refinement-max-clusters 30`
+- `--cluster-refinement-min-cluster-size 2`
+- `--cluster-refinement-merge-candidates 5`
+
+Dabei bewertet ein LLM pro Cluster mögliche thematische Ausreißer (werden ausgelagert) und prüft sinnvolle Cluster-Merges mit ähnlichen Kandidatenclustern.
+
+Dabei wird für **jede Frage** ein Status in der CLI ausgegeben (Start/Ende), damit Fehler und Fortschritt direkt sichtbar sind.
+
+
+### Hybrid-Refinement-Run (PowerShell)
+
+Für den neuen LLM-basierten Abstraction-Cluster-Refinement-Run gibt es zusätzlich:
+
+```powershell
+./run-hybrid-refinement.ps1 `
+  -Input "Sample_Data/mibi_prac/output/export AIannotated.json" `
+  -Topics "Sample_Data/mibi_prac/topic-tree.json" `
+  -Output "Sample_Data/mibi_prac/output/export AIannotated.hybrid-refined.json" `
+  -ImagesZip "Sample_Data/mibi_prac/images.zip" `
+  -KnowledgeZip "Sample_Data/mibi_prac/knowledge.zip" `
+  -ClusterRefinementModel "o4-mini" `
+  -ClusterRefinementMaxClusters 30 `
+  -ClusterRefinementMinClusterSize 2 `
+  -ClusterRefinementMergeCandidates 5
+```
+
+Das Skript startet intern einen `--postprocess-only` Lauf mit aktivem `--enable-llm-abstraction-cluster-refinement`.
+
 ## Optional: Clean-up des Output-Datensatzes
 
 Mit `--cleanup-spec <datei.json>` kann der Output nach der Verarbeitung auf definierte Felder reduziert werden.
