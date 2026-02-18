@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -15,18 +16,6 @@ STOPWORDS_DE = {
 TEMPLATE_TOKENS = {
     "was", "welche", "welcher", "welches", "aussage", "stimmt", "trifft", "ehesten", "richtig", "falsch", "liegt", "vor",
 }
-
-
-def _tokenize(text: str) -> Set[str]:
-    out: Set[str] = set()
-    for raw in (text or "").lower().replace("\n", " ").split():
-        token = "".join(ch for ch in raw if ch.isalnum() or ch in "äöüß")
-        if len(token) < 3:
-            continue
-        if token in STOPWORDS_DE or token in TEMPLATE_TOKENS:
-            continue
-        out.add(token)
-    return out
 
 
 class _UnionFind:
@@ -45,54 +34,100 @@ class _UnionFind:
             self.parent[rb] = ra
 
 
-def _candidate_pairs(items: List[Set[str]]) -> Set[Tuple[int, int]]:
-    inverted: Dict[str, List[int]] = defaultdict(list)
-    for idx, toks in enumerate(items):
-        for t in toks:
-            inverted[t].append(idx)
-
-    pairs: Set[Tuple[int, int]] = set()
-    for token_items in inverted.values():
-        if len(token_items) <= 1:
+def _tokenize(text: str) -> Set[str]:
+    out: Set[str] = set()
+    for raw in (text or "").lower().replace("\n", " ").split():
+        token = "".join(ch for ch in raw if ch.isalnum() or ch in "äöüß")
+        if len(token) < 3:
             continue
-        for i in range(len(token_items)):
-            left = token_items[i]
-            for j in range(i + 1, len(token_items)):
-                right = token_items[j]
-                if left < right:
-                    pairs.add((left, right))
-                else:
-                    pairs.add((right, left))
-    return pairs
+        if token in STOPWORDS_DE or token in TEMPLATE_TOKENS:
+            continue
+        out.add(token)
+    return out
 
 
-def _prune_frequent_tokens(items: List[Set[str]], max_doc_frequency_ratio: float = 0.03) -> List[Set[str]]:
+def _prune_frequent_tokens(items: List[Set[str]], max_doc_frequency_ratio: float = 0.03) -> Tuple[List[Set[str]], Dict[str, int]]:
     if not items:
-        return items
+        return items, {}
     n = len(items)
-    if n < 5:
-        return items
 
     df: Dict[str, int] = defaultdict(int)
     for toks in items:
         for tok in toks:
             df[tok] += 1
 
+    if n < 5:
+        return items, dict(df)
+
     max_df = max(2, int(n * max_doc_frequency_ratio))
-    return [{tok for tok in toks if df.get(tok, 0) <= max_df} for toks in items]
+    pruned = [{tok for tok in toks if df.get(tok, 0) <= max_df} for toks in items]
+    return pruned, dict(df)
 
 
-def _cluster_by_similarity(items: List[Set[str]], threshold: float) -> List[int]:
+def _idf(df: Dict[str, int], n_docs: int, tok: str) -> float:
+    return math.log((1 + n_docs) / (1 + df.get(tok, 0))) + 1.0
+
+
+def _weighted_jaccard(a: Set[str], b: Set[str], *, df: Dict[str, int], n_docs: int) -> float:
+    if not a or not b:
+        return 0.0
+    union = a | b
+    inter = a & b
+    num = sum(_idf(df, n_docs, t) for t in inter)
+    den = sum(_idf(df, n_docs, t) for t in union)
+    if den <= 0:
+        return 0.0
+    return num / den
+
+
+def _shared_rare_count(a: Set[str], b: Set[str], *, df: Dict[str, int], n_docs: int, min_idf: float = 2.2) -> int:
+    c = 0
+    for t in (a & b):
+        if _idf(df, n_docs, t) >= min_idf:
+            c += 1
+    return c
+
+
+def _candidate_pairs_topk(items: List[Set[str]], *, df: Dict[str, int], top_k: int = 80) -> Set[Tuple[int, int]]:
+    n = len(items)
+    inv: Dict[str, List[int]] = defaultdict(list)
+    for idx, toks in enumerate(items):
+        for t in toks:
+            inv[t].append(idx)
+
+    by_left: Dict[int, Dict[int, float]] = defaultdict(dict)
+    for t, idxs in inv.items():
+        weight = _idf(df, n, t)
+        if len(idxs) <= 1:
+            continue
+        for i in range(len(idxs)):
+            a = idxs[i]
+            for j in range(i + 1, len(idxs)):
+                b = idxs[j]
+                left, right = (a, b) if a < b else (b, a)
+                by_left[left][right] = by_left[left].get(right, 0.0) + weight
+
+    pairs: Set[Tuple[int, int]] = set()
+    for left, scores in by_left.items():
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[: max(10, int(top_k))]
+        for right, _ in ranked:
+            pairs.add((left, right))
+    return pairs
+
+
+def _cluster_by_similarity(items: List[Set[str]], threshold: float, *, df: Dict[str, int]) -> List[int]:
     n = len(items)
     uf = _UnionFind(n)
 
-    for i, j in _candidate_pairs(items):
+    for i, j in _candidate_pairs_topk(items, df=df, top_k=80):
         left, right = items[i], items[j]
         if not left or not right:
             continue
         if len(left) < 6 or len(right) < 6:
             continue
-        sim = len(left & right) / max(1, len(left | right))
+        if _shared_rare_count(left, right, df=df, n_docs=n, min_idf=2.2) < 1:
+            continue
+        sim = _weighted_jaccard(left, right, df=df, n_docs=n)
         if sim >= threshold:
             uf.union(i, j)
 
@@ -123,14 +158,14 @@ def build_dataset_context(
 ) -> DatasetContext:
     text_sets: List[Set[str]] = []
     for q in questions:
-        parts = [q.get("questionText", "")]
+        parts = [str(q.get("questionText") or "")]
         for a in q.get("answers") or []:
-            parts.append(a.get("text", ""))
-        parts.append(q.get("explanationText", ""))
+            parts.append(str(a.get("text") or ""))
+        parts.append(str(q.get("explanationText") or ""))
         text_sets.append(_tokenize("\n".join(parts)))
 
-    text_sets = _prune_frequent_tokens(text_sets)
-    text_cluster_ids = _cluster_by_similarity(text_sets, text_similarity_threshold)
+    text_sets, df = _prune_frequent_tokens(text_sets)
+    text_cluster_ids = _cluster_by_similarity(text_sets, text_similarity_threshold, df=df)
     question_text_cluster: Dict[str, int] = {}
     cluster_to_question_ids: Dict[int, List[str]] = defaultdict(list)
     for q, cid in zip(questions, text_cluster_ids):
@@ -177,7 +212,8 @@ def cluster_abstractions(
         question_ids.append(qid)
 
     abstraction_sets = [_tokenize(x) for x in abstractions]
-    cluster_ids = _cluster_by_similarity(abstraction_sets, threshold)
+    abstraction_sets, df = _prune_frequent_tokens(abstraction_sets)
+    cluster_ids = _cluster_by_similarity(abstraction_sets, threshold, df=df)
     q_to_cluster = {qid: cid for qid, cid in zip(question_ids, cluster_ids)}
     cluster_to_qids: Dict[int, List[str]] = defaultdict(list)
     for qid, cid in q_to_cluster.items():

@@ -44,7 +44,10 @@ def should_apply_pass_b_change(
     apply_min_conf_b: float,
     retrieval_quality: float,
     evidence_count: int,
+    allow_auto_change: bool = True,
 ) -> bool:
+    if not allow_auto_change:
+        return False
     if cannot_judge:
         return False
     if not agree_with_change:

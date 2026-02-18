@@ -74,9 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Chunk size when parsing files from knowledge ZIP")
 
     ap.add_argument("--text-cluster-similarity", type=float, default=CONFIG["TEXT_CLUSTER_SIMILARITY"],
-                    help="Jaccard threshold for question-content clustering")
+                    help="Weighted-Jaccard threshold for question-content clustering (with retrieval top-k candidates)")
     ap.add_argument("--abstraction-cluster-similarity", type=float, default=CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"],
-                    help="Jaccard threshold for abstraction clustering")
+                    help="Weighted-Jaccard threshold for abstraction clustering")
 
     ap.add_argument("--enable-review-pass", dest="enable_review_pass", action="store_true",
                     default=CONFIG["ENABLE_REVIEW_PASS"],
@@ -86,6 +86,31 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--review-model", default=CONFIG["REVIEW_MODEL"])
     ap.add_argument("--review-min-maintenance-severity", type=int, default=CONFIG["REVIEW_MIN_MAINTENANCE_SEVERITY"],
                     help="Run review pass only for maintenance severity >= this value")
+    ap.add_argument("--topic-candidate-top-k", type=int, default=CONFIG["TOPIC_CANDIDATE_TOP_K"],
+                    help="How many deterministic topic candidates to attach per question")
+    ap.add_argument("--run-report", default=CONFIG["RUN_REPORT_PATH"],
+                    help="Optional JSON path for workflow run metrics/report")
+    ap.add_argument("--topic-candidate-outside-force-passb-conf", type=float,
+                    default=CONFIG["TOPIC_CANDIDATE_OUTSIDE_FORCE_PASSB_CONF"],
+                    help="Run Pass B when Pass A picks topic outside candidates below this confidence")
+    ap.add_argument("--enable-repeat-reconstruction", dest="enable_repeat_reconstruction", action="store_true",
+                    default=CONFIG["ENABLE_REPEAT_RECONSTRUCTION"],
+                    help="Enable repeat-pattern reconstruction suggestions across exam years")
+    ap.add_argument("--no-enable-repeat-reconstruction", dest="enable_repeat_reconstruction", action="store_false",
+                    help="Disable repeat-pattern reconstruction suggestions")
+    ap.add_argument("--auto-apply-repeat-reconstruction", dest="auto_apply_repeat_reconstruction", action="store_true",
+                    default=CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"],
+                    help="Automatically apply repeat reconstruction suggestions when allowed by preprocessing gates")
+    ap.add_argument("--no-auto-apply-repeat-reconstruction", dest="auto_apply_repeat_reconstruction", action="store_false",
+                    help="Do not auto-apply repeat reconstruction suggestions")
+    ap.add_argument("--repeat-min-similarity", type=float, default=CONFIG["REPEAT_MIN_SIMILARITY"],
+                    help="Minimum similarity for repeat-pattern clustering")
+    ap.add_argument("--repeat-min-anchor-conf", type=float, default=CONFIG["REPEAT_MIN_ANCHOR_CONF"],
+                    help="Minimum combined confidence for high-quality repeat anchors")
+    ap.add_argument("--repeat-min-anchor-consensus", type=int, default=CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"],
+                    help="Minimum number of high-quality anchors that must vote for a correct answer text")
+    ap.add_argument("--repeat-min-match-ratio", type=float, default=CONFIG["REPEAT_MIN_MATCH_RATIO"],
+                    help="Minimum overlap ratio between anchor-correct texts and target answers")
 
     ap.add_argument("--debug", dest="debug", action="store_true", default=CONFIG["DEBUG"],
                     help="Store raw pass outputs under aiAudit._debug")
@@ -179,6 +204,7 @@ def main() -> None:
         container=container,
         key_map=key_map,
         topic_catalog_text=topic_catalog_text,
+        topic_catalog=catalog,
         schema_a=schema_a,
         schema_b=schema_b,
         schema_review=schema_review,

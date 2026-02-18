@@ -262,8 +262,29 @@ Siehe `KNOWN_ISSUES.md`.
 --abstraction-cluster-similarity 0.45 \
 --enable-review-pass \
 --review-model o4-mini \
---review-min-maintenance-severity 2
+--review-min-maintenance-severity 2 \
+--topic-candidate-top-k 3 \
+--topic-candidate-outside-force-passb-conf 0.92 \
+--enable-repeat-reconstruction \
+--repeat-min-similarity 0.72 \
+--repeat-min-anchor-conf 0.82 \
+--repeat-min-anchor-consensus 1 \
+--repeat-min-match-ratio 0.60 \
+--auto-apply-repeat-reconstruction \
+--run-report workflow_report.json
 ```
+
+`--topic-candidate-top-k` steuert, wie viele deterministische Topic-Kandidaten vor Pass A in den Payload aufgenommen werden.
+
+`--topic-candidate-outside-force-passb-conf` erzwingt Pass B, wenn Pass A trotz Kandidatenfilter ein Topic außerhalb der Top-k vorschlägt und die Topic-Confidence unter der Schwelle liegt.
+
+`--enable-repeat-reconstruction` aktiviert die Erkennung wiederkehrender Fragen über verschiedene Klausurjahre mit Vorschlägen zur Rekonstruktion schwacher Items.
+
+`--repeat-min-similarity`, `--repeat-min-anchor-conf`, `--repeat-min-anchor-consensus` und `--repeat-min-match-ratio` steuern, wie streng Repeat-Cluster, Anchor-Konsens und Textüberlappung für Rekonstruktionsvorschläge bewertet werden.
+
+`--auto-apply-repeat-reconstruction` erlaubt automatisches Übernehmen der Rekonstruktionsvorschläge (nur wenn Preprocessing-Gates Auto-Änderungen erlauben).
+
+`--run-report` schreibt einen JSON-Laufbericht (u. a. Preprocessing-Gates, Candidate-Konflikte, Topic-Drift, Repeat-Rekonstruktionen, blockierte Auto-Changes, Pass-B/Review-Häufigkeiten, Maintenance-Grundverteilung) für die nachgelagerte Kalibrierung.
 
 
 **Hinweis V5:**

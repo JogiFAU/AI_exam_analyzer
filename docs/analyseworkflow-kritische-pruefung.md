@@ -77,7 +77,7 @@ Vor der Schleife über Einzel-Fragen wird ein globaler Kontext berechnet:
 
 1. **Textcluster über Frageninhalt**
    - Tokenisierung (lowercase, alnum + Umlaute, Tokenlänge >= 3).
-   - Ähnlichkeit = Jaccard über Tokenmengen.
+   - Ähnlichkeit = **Weighted Jaccard** (IDF-gewichtet) über Tokenmengen.
    - Clustering via Union-Find über Kandidatenpaare aus invertiertem Tokenindex.
    - Default-Schwelle: `text_cluster_similarity = 0.32`.
 
@@ -107,7 +107,9 @@ Wenn Knowledge aktiviert ist:
 
 ## 4.1 Pass A (immer)
 
-Pass A erhält Fragepayload + optionale Bilder und muss im Schema liefern:
+Pass A erhält Fragepayload + optionale Bilder. Zusätzlich kann das Preprocessing deterministische `topicCandidates` (Top-k) beilegen, um die Topic-Auswahl zu begrenzen.
+
+Pass A muss im Schema liefern:
 - `topic_initial` (nur aus Frage + Antworten),
 - `answer_review` (Plausibilität + Änderungsvorschlag + Evidenz-IDs),
 - `maintenance`,
@@ -117,7 +119,7 @@ Pass A erhält Fragepayload + optionale Bilder und muss im Schema liefern:
 Wesentliche Prompt-Regeln:
 - Bildkontext verpflichtend berücksichtigen, falls vorhanden.
 - Bei fehlender/schwacher Evidenz konservative Confidence + ggf. Wartungsflag.
-- `proposedCorrectIndices` sind 0-basiert.
+- `proposedCorrectIndices`/`verifiedCorrectIndices` verwenden den `answerIndex` der Antwortoptionen (1-basiert), nicht die Array-Position.
 - Bei erwartetem aber fehlendem Bild: Maintenance setzen.
 
 ## 4.2 Triggerlogik für Pass B
@@ -212,7 +214,7 @@ Bei `write_top_level=true` werden zusätzliche Felder gesetzt:
 
 Nach Verarbeitung aller Fragen:
 - Clustering über `question_abstraction.summary` (fallback: `questionText`),
-- gleiche Token-/Jaccard-/Union-Find-Methodik,
+- gleiche Token-/Weighted-Jaccard-/Union-Find-Methodik mit Kandidatenretrieval (Top-k) und Rare-Token-Merge-Gates,
 - Default-Schwelle: `abstraction_cluster_similarity = 0.45`.
 
 Cluster-ID wird in `aiAudit.clusters.abstractionClusterId` gespeichert.

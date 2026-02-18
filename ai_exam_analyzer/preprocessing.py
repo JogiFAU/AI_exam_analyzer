@@ -1,4 +1,4 @@
-"""Deterministic pre-checks for dataset quality signals."""
+"""Deterministic pre-checks and gate decisions for dataset quality signals."""
 
 from __future__ import annotations
 
@@ -11,6 +11,11 @@ _UNCERTAIN_NOTE_RE = re.compile(
     r"\b(irgendwas|vielleicht|kann\s+sich\s+jemand\s+erinnern|unsicher|notiz)\b",
     re.IGNORECASE,
 )
+
+# Rule classes for downstream gating.
+_HARD_BLOCKERS = {"missing_correct_indices", "invalid_answer_option"}
+_CONTEXT_BLOCKERS = {"missing_required_image_asset"}
+_SOFT_BLOCKERS = {"insufficient_question_context", "non_exam_question_or_uncertain_source"}
 
 
 def _question_word_count(question: Dict[str, Any]) -> int:
@@ -52,3 +57,48 @@ def compute_quality_maintenance_reasons(question: Dict[str, Any]) -> List[str]:
     # deterministic ordering
     return list(dict.fromkeys(reasons))
 
+
+def compute_preprocessing_assessment(question: Dict[str, Any]) -> Dict[str, Any]:
+    """Compute structured preprocessing assessment and execution gates.
+
+    Returns a dictionary with reasons, classes, quality score and gate decisions.
+    """
+    reasons = compute_quality_maintenance_reasons(question)
+
+    hard_blockers = [r for r in reasons if r in _HARD_BLOCKERS]
+    context_blockers = [r for r in reasons if r in _CONTEXT_BLOCKERS]
+    soft_blockers = [r for r in reasons if r in _SOFT_BLOCKERS]
+
+    answers = question.get("answers") or []
+    question_text = (question.get("questionText") or "").strip()
+
+    # Extremely malformed entries: skip LLM and mark for manual work.
+    run_llm = bool(question_text) and bool(answers)
+
+    # No automatic dataset mutation for hard blockers or missing required image assets.
+    allow_auto_change = not bool(hard_blockers or context_blockers)
+
+    # Force manual review when hard/context blockers exist.
+    force_manual_review = bool(hard_blockers or context_blockers)
+
+    # Simple transparent quality score.
+    penalty = 0.0
+    penalty += 0.38 * len(hard_blockers)
+    penalty += 0.24 * len(context_blockers)
+    penalty += 0.10 * len(soft_blockers)
+    quality_score = max(0.0, round(1.0 - min(1.0, penalty), 4))
+
+    return {
+        "reasons": reasons,
+        "classes": {
+            "hardBlockers": hard_blockers,
+            "contextBlockers": context_blockers,
+            "softBlockers": soft_blockers,
+        },
+        "gates": {
+            "runLlm": run_llm,
+            "allowAutoChange": allow_auto_change,
+            "forceManualReview": force_manual_review,
+        },
+        "qualityScore": quality_score,
+    }
