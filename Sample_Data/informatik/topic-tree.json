@@ -1,0 +1,60 @@
+{ "subject": "Medizinische Informatik",
+  "superTopics": [
+    {
+      "name": "Informationssysteme und Dokumentation",
+      "subtopics": [
+        "Krankenhaus-IT-Systeme",
+        "digitale Akten",
+        "Dokumentationsgrundlagen",
+        "Skalenniveaus",
+        "Dokumentationspflicht und Archivierung"
+      ]
+    },
+    {
+      "name": "Ordnungssysteme und Abrechnung",
+      "subtopics": [
+        "Terminologiekontrolle",
+        "Diagnosen und Prozeduren",
+        "Wissensstrukturen",
+        "Krankenhausfinanzierung"
+      ]
+    },
+    {
+      "name": "Recherche und Wissensquellen",
+      "subtopics": [
+        "PubMed-Suche",
+        "Schlagwort-Systematik",
+        "Wissenschaftliche Kennzahlen"
+      ]
+    },
+    {
+      "name": "Analyse und Entscheidungsunterstützung",
+      "subtopics": [
+        "Maschinelles Lernen",
+        "Sprachmodelle",
+        "Modellbewertung",
+        "Berichtsstandards",
+        "Computergestützte Entscheidungshilfe"
+      ]
+    },
+    {
+      "name": "Forschungs-IT und Bioinformatik",
+      "subtopics": [
+        "Forschungsdaten",
+        "Datennutzung",
+        "Bioinformatik",
+        "Vernetzung"
+      ]
+    },
+    {
+      "name": "Infrastruktur und Sicherheit",
+      "subtopics": [
+        "Datenaustausch",
+        "Bildgebung",
+        "Bildverarbeitung",
+        "Telemedizin und Sensorik",
+        "Datenschutz und Sicherheit"
+      ]
+    }
+  ]
+}
