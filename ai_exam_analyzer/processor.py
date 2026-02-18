@@ -1546,6 +1546,7 @@ def rerun_postprocessing_from_output(
     key_map: Dict[str, Dict[str, Any]],
     schema_review: Dict[str, Any],
     schema_reconstruction: Dict[str, Any],
+    schema_cluster_refinement: Dict[str, Any],
     cleanup_spec: Optional[Dict[str, Any]] = None,
     knowledge_base: Optional[KnowledgeBase] = None,
     image_store: Optional[QuestionImageStore] = None,
