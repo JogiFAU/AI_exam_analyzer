@@ -2,7 +2,7 @@
 
 import os
 from types import SimpleNamespace
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
@@ -680,25 +680,44 @@ def main() -> None:
         image_store = _prepare_image_store(args)
         knowledge_base = _prepare_knowledge_base(args, topic_tree)
 
-        recent_events = []
+        recent_events: List[str] = []
 
         def on_progress(event: Dict[str, Any]) -> None:
             total = max(1, int(event.get("total") or len(questions) or 1))
-            processed = int(event.get("processed", 0))
+            processed = int(event.get("processed", 0) or 0)
+            done_count = int(event.get("done", 0) or 0)
+            skipped_count = int(event.get("skipped", 0) or 0)
+            index = event.get("index")
+            stage = str(event.get("stage") or "pipeline")
+            event_name = str(event.get("event") or "event")
+            message = str(event.get("message") or "---")
+
             pct = min(1.0, processed / total)
             progress_bar.progress(pct)
-            status_text.markdown(f"**Status:** {event.get('message', '---')}")
-            metrics.metric("Fortschritt", f"{processed}/{total}")
 
-            line = (
-                f"- [{event.get('event', 'event')}] "
-                f"{event.get('message', '')} "
-                f"(done={event.get('done', 0)}, skipped={event.get('skipped', 0)})"
-            )
+            headline = message
+            if index is not None:
+                headline = f"{headline} *(Frage {index}/{total})*"
+            status_text.markdown(f"**[{stage}]** {headline}")
+
+            cols = metrics.columns(4)
+            cols[0].metric("Verarbeitet", f"{processed}/{total}")
+            cols[1].metric("Abgeschlossen", str(done_count))
+            cols[2].metric("Übersprungen", str(skipped_count))
+            cols[3].metric("Phase", stage)
+
+            details = []
+            if "retrieval_quality" in event:
+                details.append(f"rq={float(event.get('retrieval_quality') or 0.0):.2f}")
+            if "evidence_count" in event:
+                details.append(f"evidence={int(event.get('evidence_count') or 0)}")
+            detail_text = f" ({', '.join(details)})" if details else ""
+
+            line = f"- [{stage}/{event_name}] {message}{detail_text}"
             recent_events.append(line)
-            if len(recent_events) > 12:
+            if len(recent_events) > 20:
                 del recent_events[0]
-            event_log.markdown("**Live-Log**\n" + "\n".join(recent_events))
+            event_log.markdown("**Live-Log (neueste unten)**\n" + "\n".join(recent_events))
 
         process_questions(
             args=args,
