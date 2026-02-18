@@ -262,8 +262,14 @@ Siehe `KNOWN_ISSUES.md`.
 --abstraction-cluster-similarity 0.45 \
 --enable-review-pass \
 --review-model o4-mini \
---review-min-maintenance-severity 2
+--review-min-maintenance-severity 2 \
+--topic-candidate-top-k 3 \
+--run-report workflow_report.json
 ```
+
+`--topic-candidate-top-k` steuert, wie viele deterministische Topic-Kandidaten vor Pass A in den Payload aufgenommen werden.
+
+`--run-report` schreibt einen JSON-Laufbericht (u. a. Preprocessing-Gates, Pass-B/Review-Häufigkeiten, Maintenance-Grundverteilung) für die nachgelagerte Kalibrierung.
 
 
 **Hinweis V5:**
