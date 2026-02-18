@@ -8,7 +8,14 @@ from ai_exam_analyzer.config import PIPELINE_VERSION
 from ai_exam_analyzer.io_utils import save_json
 from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.knowledge_base import KnowledgeBase, build_query_text
-from ai_exam_analyzer.passes import run_pass_a, run_pass_b, run_review_pass, should_run_pass_b
+from ai_exam_analyzer.passes import (
+    run_explainer_pass,
+    run_pass_a,
+    run_pass_b,
+    run_reconstruction_pass,
+    run_review_pass,
+    should_run_pass_b,
+)
 from ai_exam_analyzer.payload import build_question_payload
 from ai_exam_analyzer.workflow_context import build_dataset_context, cluster_abstractions
 from ai_exam_analyzer.decision_policy import compose_confidence, should_apply_pass_b_change, should_run_review_pass
@@ -63,6 +70,20 @@ def _coerce_dataset_correct_indices(raw_indices: List[int], external_indices: Li
         return sorted(set(mapped))
 
     return sorted({i for i in cleaned if i in ext_set})
+
+def _topic_row_for_key(key_map: Dict[str, Dict[str, Any]], topic_key: Any) -> Dict[str, Any]:
+    key = str(topic_key or "")
+    row = key_map.get(key)
+    if row is not None:
+        return row
+    fallback = next(iter(key_map.values()), None)
+    if fallback is None:
+        raise RuntimeError("Topic catalog is empty; cannot map topic keys.")
+    return {
+        **fallback,
+        "superTopicName": "UNKNOWN_TOPIC",
+        "subtopicName": key or "UNKNOWN_TOPIC",
+    }
 
 
 def _build_output_obj(
@@ -121,6 +142,8 @@ def process_questions(
     schema_a: Dict[str, Any],
     schema_b: Dict[str, Any],
     schema_review: Dict[str, Any],
+    schema_reconstruction: Dict[str, Any],
+    schema_explainer: Dict[str, Any],
     cleanup_spec: Optional[Dict[str, Any]] = None,
     knowledge_base: Optional[KnowledgeBase] = None,
     image_store: Optional[QuestionImageStore] = None,
@@ -272,6 +295,7 @@ def process_questions(
                         "originalCorrectIndices": current,
                         "passA": {"isPlausible": False, "confidence": 0.0, "recommendChange": False, "proposedCorrectIndices": [], "reasonShort": "Skipped by preprocessing gate", "reasonDetailed": "runLlm=false", "evidenceChunkIds": []},
                         "finalCorrectIndices": current,
+                        "finalAiCorrectIndices": current,
                         "finalAnswerConfidence": 0.0,
                         "finalAnswerConfidenceSource": "preprocessing",
                         "finalCombinedConfidence": 0.0,
@@ -344,6 +368,7 @@ def process_questions(
             will_change = False
             change_source = "none"
             final_correct_indices = current
+            final_ai_correct_indices = current
             verification: Dict[str, Any] = {"ran": False}
             verifier_agreed: Optional[bool] = None
 
@@ -433,12 +458,13 @@ def process_questions(
                         evidence_count=len(evidence_chunks),
                         allow_auto_change=allow_auto_change_gate,
                     ):
-                        apply_correct_indices(q, verified)
                         will_change = True
                         change_source = "passB"
-                        final_correct_indices = verified
+                        final_correct_indices = current
+                        final_ai_correct_indices = verified
                     else:
                         final_correct_indices = current
+                        final_ai_correct_indices = verified if (verified and agree and (not cannot)) else current
 
                     verification = {
                         "ran": True,
@@ -495,8 +521,8 @@ def process_questions(
                 maintenance["severity"] = max(int(maintenance.get("severity", 1)), 3)
                 maintenance["reasons"] = list(dict.fromkeys((maintenance.get("reasons") or []) + ["preprocessing_force_manual_review"]))
 
-            init_row = key_map[pass_a["topic_initial"]["topicKey"]]
-            final_row = key_map[final_topic_key]
+            init_row = _topic_row_for_key(key_map, pass_a["topic_initial"].get("topicKey"))
+            final_row = _topic_row_for_key(key_map, final_topic_key)
             compact_evidence = _compact_evidence(evidence_chunks)
 
             audit.update({
@@ -528,6 +554,7 @@ def process_questions(
                         "evidenceChunkIds": pass_a["answer_review"].get("evidenceChunkIds", []),
                     },
                     "finalCorrectIndices": final_correct_indices,
+                    "finalAiCorrectIndices": final_ai_correct_indices,
                     "finalAnswerConfidence": final_answer_confidence,
                     "finalAnswerConfidenceSource": final_answer_confidence_source,
                     "finalCombinedConfidence": final_combined_confidence,
@@ -535,7 +562,8 @@ def process_questions(
                     "evidenceCount": len(evidence_chunks),
                     "evidence": compact_evidence,
                     "aiDisagreesWithDataset": ai_disagrees_with_dataset,
-                    "changedInDataset": bool(will_change),
+                    "changedInDataset": False,
+                    "aiSuggestedChange": bool(will_change),
                     "changeSource": change_source,
                     "verification": verification,
                 },
@@ -575,12 +603,11 @@ def process_questions(
                         n_answers,
                         valid_indices=external_indices,
                     )
-                    if review_indices and review_indices != (q.get("correctIndices") or []):
-                        apply_correct_indices(q, review_indices)
-                        audit["answerPlausibility"]["finalCorrectIndices"] = review_indices
+                    if review_indices:
+                        audit["answerPlausibility"]["finalAiCorrectIndices"] = review_indices
                     topic_key_review = review.get("finalTopicKey")
                     if topic_key_review in key_map:
-                        topic_row_review = key_map[topic_key_review]
+                        topic_row_review = _topic_row_for_key(key_map, topic_key_review)
                         audit["topicFinal"]["superTopic"] = topic_row_review["superTopicName"]
                         audit["topicFinal"]["subtopic"] = topic_row_review["subtopicName"]
                         audit["topicFinal"]["source"] = "review"
@@ -690,15 +717,108 @@ def process_questions(
                 if bool(gates.get("allowAutoChange", True)):
                     current_idx = sorted(set(q.get("correctIndices") or []))
                     if suggestion.suggested_correct_indices and suggestion.suggested_correct_indices != current_idx:
-                        apply_correct_indices(q, suggestion.suggested_correct_indices)
                         ap = (audit.get("answerPlausibility") or {})
                         if isinstance(ap, dict):
-                            ap["finalCorrectIndices"] = suggestion.suggested_correct_indices
-                            ap["changedInDataset"] = True
+                            ap["finalAiCorrectIndices"] = suggestion.suggested_correct_indices
+                            ap["aiSuggestedChange"] = True
                             ap["changeSource"] = "repeat_reconstruction"
                         report["repeatReconstruction"]["autoApplied"] += 1
                 else:
                     report["repeatReconstruction"]["blockedByGate"] += 1
+
+
+    if bool(getattr(args, "enable_reconstruction_pass", True)):
+        for q in questions:
+            audit = q.get("aiAudit")
+            if not isinstance(audit, dict):
+                continue
+
+            qid = str(q.get("id") or "")
+            cluster_id = (((audit.get("clusters") or {}).get("abstractionClusterId")) or ((audit.get("clusters") or {}).get("questionContentClusterId")))
+            related: List[Dict[str, Any]] = []
+            if cluster_id is not None:
+                for other in questions:
+                    other_id = str(other.get("id") or "")
+                    if other_id == qid:
+                        continue
+                    other_audit = other.get("aiAudit") or {}
+                    other_cluster_id = ((other_audit.get("clusters") or {}).get("abstractionClusterId"))
+                    if other_cluster_id == cluster_id:
+                        related.append({
+                            "questionId": other_id,
+                            "questionText": (other.get("questionText") or "")[:280],
+                            "correctIndices": other.get("correctIndices") or [],
+                            "qualityNeedsMaintenance": bool(((other_audit.get("maintenance") or {}).get("needsMaintenance"))),
+                        })
+                    if len(related) >= 8:
+                        break
+
+            payload_tmp = build_question_payload(
+                q,
+                current_correct_indices=_coerce_dataset_correct_indices(q.get("correctIndices") or [], _answer_external_indices(q)),
+            )
+            evidence_chunks: List[Dict[str, Any]] = []
+            if knowledge_base is not None:
+                evidence_chunks, _ = knowledge_base.retrieve(
+                    build_query_text(payload_tmp),
+                    top_k=max(1, int(args.knowledge_top_k)),
+                    min_score=float(args.knowledge_min_score),
+                    max_chars=max(500, int(args.knowledge_max_chars)),
+                )
+
+            reconstruction_context = {
+                "question": payload_tmp,
+                "aiAudit": audit,
+                "relatedClusterQuestions": related,
+                "retrievedEvidence": evidence_chunks,
+                "hasAltfrageKeyword": ("altfrage" in (str(q.get("questionText") or "").lower())),
+            }
+
+            try:
+                rec = run_reconstruction_pass(
+                    client,
+                    payload=reconstruction_context,
+                    schema=schema_reconstruction,
+                    model=args.reconstruction_model,
+                )
+                audit["reconstruction"] = rec
+            except Exception as rec_exc:
+                audit["reconstruction"] = {"error": str(rec_exc)}
+
+    if bool(getattr(args, "enable_explainer_pass", False)):
+        for q in questions:
+            audit = q.get("aiAudit")
+            if not isinstance(audit, dict):
+                continue
+            payload_tmp = build_question_payload(
+                q,
+                current_correct_indices=_coerce_dataset_correct_indices(q.get("correctIndices") or [], _answer_external_indices(q)),
+            )
+            payload_tmp["aiAudit"] = {
+                "topicFinal": (audit.get("topicFinal") or {}),
+                "answerPlausibility": (audit.get("answerPlausibility") or {}),
+                "maintenance": (audit.get("maintenance") or {}),
+                "clusters": (audit.get("clusters") or {}),
+                "reconstruction": (audit.get("reconstruction") or {}),
+            }
+            if knowledge_base is not None:
+                evidence_chunks, _ = knowledge_base.retrieve(
+                    build_query_text(payload_tmp),
+                    top_k=max(1, int(args.knowledge_top_k)),
+                    min_score=float(args.knowledge_min_score),
+                    max_chars=max(500, int(args.knowledge_max_chars)),
+                )
+                payload_tmp["retrievedEvidence"] = evidence_chunks
+            try:
+                expl = run_explainer_pass(
+                    client,
+                    payload=payload_tmp,
+                    schema=schema_explainer,
+                    model=args.explainer_model,
+                )
+                audit["explainer"] = expl
+            except Exception as expl_exc:
+                audit["explainer"] = {"error": str(expl_exc)}
 
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)

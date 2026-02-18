@@ -41,6 +41,11 @@ CONFIG = {
     "REPEAT_MIN_ANCHOR_CONF": 0.82,
     "REPEAT_MIN_ANCHOR_CONSENSUS": 1,
     "REPEAT_MIN_MATCH_RATIO": 0.6,
+
+    "ENABLE_RECONSTRUCTION_PASS": True,
+    "RECONSTRUCTION_MODEL": "o4-mini",
+    "ENABLE_EXPLAINER_PASS": False,
+    "EXPLAINER_MODEL": "gpt-4.1-mini",
 }
 
-PIPELINE_VERSION = "2pass-merged-v8-repeat-consensus-cluster-v2"
+PIPELINE_VERSION = "2pass-merged-v9-annotate-only-reconstruct-explain"

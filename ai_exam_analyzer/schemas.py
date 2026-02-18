@@ -143,3 +143,64 @@ def schema_review_pass(topic_keys: List[str]) -> Dict[str, Any]:
         "required": ["finalCorrectIndices", "finalTopicKey", "reviewComment", "recommendManualReview", "confidence"],
         "additionalProperties": False,
     }
+
+
+
+def schema_reconstruction_pass() -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "isLikelyLegacyQuestion": {"type": "boolean"},
+            "legacySignals": {"type": "array", "items": {"type": "string"}},
+            "qualityClass": {"type": "string", "enum": ["high", "medium", "low"]},
+            "reconstructedQuestion": {
+                "type": "object",
+                "properties": {
+                    "questionText": {"type": "string"},
+                    "answers": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "answerIndex": {"type": "integer", "minimum": 1},
+                                "text": {"type": "string"},
+                            },
+                            "required": ["answerIndex", "text"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["questionText", "answers"],
+                "additionalProperties": False,
+            },
+            "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            "reasoning": {"type": "string"},
+        },
+        "required": ["isLikelyLegacyQuestion", "legacySignals", "qualityClass", "reconstructedQuestion", "confidence", "reasoning"],
+        "additionalProperties": False,
+    }
+
+
+def schema_explainer_pass() -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "correctnessExplanation": {"type": "string"},
+            "wrongOptionExplanations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "answerIndex": {"type": "integer", "minimum": 1},
+                        "whyWrong": {"type": "string"},
+                    },
+                    "required": ["answerIndex", "whyWrong"],
+                    "additionalProperties": False,
+                },
+            },
+            "contextualization": {"type": "string"},
+        },
+        "required": ["summary", "correctnessExplanation", "wrongOptionExplanations", "contextualization"],
+        "additionalProperties": False,
+    }

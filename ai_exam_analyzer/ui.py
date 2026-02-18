@@ -15,7 +15,13 @@ from ai_exam_analyzer.knowledge_base import (
     save_index_json,
 )
 from ai_exam_analyzer.processor import process_questions
-from ai_exam_analyzer.schemas import schema_pass_a, schema_pass_b, schema_review_pass
+from ai_exam_analyzer.schemas import (
+    schema_explainer_pass,
+    schema_pass_a,
+    schema_pass_b,
+    schema_reconstruction_pass,
+    schema_review_pass,
+)
 from ai_exam_analyzer.topic_catalog import build_topic_catalog, format_topic_catalog_for_prompt
 
 
@@ -426,6 +432,71 @@ def _build_args() -> SimpleNamespace:
                 disabled=not enable_review_pass,
             )
 
+            enable_repeat_reconstruction = st.checkbox(
+                "Repeat-Reconstruction aktivieren",
+                value=bool(CONFIG["ENABLE_REPEAT_RECONSTRUCTION"]),
+                help="Erkennt wiederholte Fragen über Jahrgänge und ergänzt entsprechende Audit-Signale.",
+            )
+            auto_apply_repeat_reconstruction = st.checkbox(
+                "Repeat-Reconstruction Auto-Apply (nur Audit-Suggestion)",
+                value=bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"]),
+                help="Übernimmt Repeat-Vorschläge als AI-Empfehlung im Audit (ohne Datensatz-Mutation).",
+                disabled=not enable_repeat_reconstruction,
+            )
+            repeat_min_similarity = st.slider(
+                "Repeat: Min Similarity",
+                0.0,
+                1.0,
+                float(CONFIG["REPEAT_MIN_SIMILARITY"]),
+                0.01,
+                disabled=not enable_repeat_reconstruction,
+            )
+            repeat_min_anchor_conf = st.slider(
+                "Repeat: Min Anchor Confidence",
+                0.0,
+                1.0,
+                float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]),
+                0.01,
+                disabled=not enable_repeat_reconstruction,
+            )
+            repeat_min_anchor_consensus = st.number_input(
+                "Repeat: Min Anchor Consensus",
+                min_value=1,
+                value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]),
+                step=1,
+                disabled=not enable_repeat_reconstruction,
+            )
+            repeat_min_match_ratio = st.slider(
+                "Repeat: Min Match Ratio",
+                0.0,
+                1.0,
+                float(CONFIG["REPEAT_MIN_MATCH_RATIO"]),
+                0.01,
+                disabled=not enable_repeat_reconstruction,
+            )
+
+            enable_reconstruction_pass = st.checkbox(
+                "Reconstruction-Pass aktivieren",
+                value=bool(CONFIG["ENABLE_RECONSTRUCTION_PASS"]),
+                help="Führt eine Rekonstruktions-/Altfrage-Bewertung pro Frage aus und annotiert das Ergebnis.",
+            )
+            reconstruction_model = st.text_input(
+                "Reconstruction Modell",
+                value=str(CONFIG["RECONSTRUCTION_MODEL"]),
+                disabled=not enable_reconstruction_pass,
+            )
+
+            enable_explainer_pass = st.checkbox(
+                "Explainer-Pass aktivieren",
+                value=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
+                help="Erzeugt eine didaktische Erklärung pro Frage im Audit.",
+            )
+            explainer_model = st.text_input(
+                "Explainer Modell",
+                value=str(CONFIG["EXPLAINER_MODEL"]),
+                disabled=not enable_explainer_pass,
+            )
+
             write_top_level = st.checkbox(
                 "Top-Level ai* Felder schreiben",
                 value=CONFIG["WRITE_TOP_LEVEL"],
@@ -508,12 +579,16 @@ def _build_args() -> SimpleNamespace:
         topic_candidate_top_k=int(CONFIG["TOPIC_CANDIDATE_TOP_K"]),
         run_report=str(CONFIG.get("RUN_REPORT_PATH", "")),
         topic_candidate_outside_force_passb_conf=float(CONFIG["TOPIC_CANDIDATE_OUTSIDE_FORCE_PASSB_CONF"]),
-        enable_repeat_reconstruction=bool(CONFIG["ENABLE_REPEAT_RECONSTRUCTION"]),
-        auto_apply_repeat_reconstruction=bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"]),
-        repeat_min_similarity=float(CONFIG["REPEAT_MIN_SIMILARITY"]),
-        repeat_min_anchor_conf=float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]),
-        repeat_min_anchor_consensus=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]),
-        repeat_min_match_ratio=float(CONFIG["REPEAT_MIN_MATCH_RATIO"]),
+        enable_repeat_reconstruction=bool(enable_repeat_reconstruction),
+        auto_apply_repeat_reconstruction=bool(auto_apply_repeat_reconstruction),
+        repeat_min_similarity=float(repeat_min_similarity),
+        repeat_min_anchor_conf=float(repeat_min_anchor_conf),
+        repeat_min_anchor_consensus=int(repeat_min_anchor_consensus),
+        repeat_min_match_ratio=float(repeat_min_match_ratio),
+        enable_reconstruction_pass=bool(enable_reconstruction_pass),
+        reconstruction_model=reconstruction_model.strip(),
+        enable_explainer_pass=bool(enable_explainer_pass),
+        explainer_model=explainer_model.strip(),
     )
 
 
@@ -588,6 +663,8 @@ def main() -> None:
         schema_a = schema_pass_a(topic_keys)
         schema_b = schema_pass_b(topic_keys)
         schema_review = schema_review_pass(topic_keys)
+        schema_reconstruction = schema_reconstruction_pass()
+        schema_explainer = schema_explainer_pass()
 
         data = load_json(args.input)
         if isinstance(data, dict) and "questions" in data:
@@ -633,6 +710,8 @@ def main() -> None:
             schema_a=schema_a,
             schema_b=schema_b,
             schema_review=schema_review,
+            schema_reconstruction=schema_reconstruction,
+            schema_explainer=schema_explainer,
             cleanup_spec=cleanup_spec,
             knowledge_base=knowledge_base,
             image_store=image_store,
