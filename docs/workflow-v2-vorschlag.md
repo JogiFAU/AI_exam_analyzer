@@ -88,18 +88,31 @@ Diese Metriken dienen als „Regler“, um Schwellen je Fach iterativ zu kalibri
 - [x] **Phase 5 (teilweise):** optionaler Run-Report (`--run-report`) mit Gate-/Pass-Metriken, Candidate-Konflikten, Topic-Drift und Maintenance-Grundverteilungen.
 
 ### Nächste Prioritäten (konkret)
-1. **Repeat-Reconstruction (automatisierte Verbesserung) stabilisieren**
-   - High-Quality-Anker über Jahre erkennen und auf Maintenance-Items übertragen.
-   - Auto-Apply nur bei Anchor-Konsens + ausreichend Textüberlappung + erlaubten Gates, sonst Suggestion-only.
+1. **Cross-Run-Learning für Einzel-Fach-Runs ergänzen (höchster Impact)**
+   - Persistenten „Anchor-Speicher“ je Fach einführen (z. B. `artifacts/<fach>/anchors.json`), damit Repeat-Reconstruction nicht nur innerhalb eines Runs, sondern auch über mehrere Jahresimporte hinweg lernt.
+   - Nur geprüfte Anker übernehmen (`status=completed`, keine harten Maintenance-Reason-Codes, Mindest-Confidence).
 
-2. **Run-Report weiter kalibrieren**
-   - Präzisions-Proxy für Repeat-Rekonstruktionen (später durch Review bestätigt?).
-   - Anteil blockierter Auto-Changes je Reason-Klasse.
+2. **Review-Loop als aktive Lernschleife anbinden**
+   - Review-Entscheidungen (akzeptiert/verworfen) maschinenlesbar in den Run-Report zurückschreiben.
+   - Schwellen (`repeat_min_similarity`, `repeat_min_match_ratio`, Topic-Konflikt-Schwellen) datengetrieben nachführen statt manuell.
 
-3. **Clustering V2 umsetzen**
-   - Retrieval-Top-k + Re-Ranking + Merge-Gates statt reinem globalen Jaccard-Union-Find.
-   - Cluster-Qualitätsflags (`cohesion`, `bridge_score`) direkt im Audit speichern.
+3. **Cluster-Qualität explizit messen und im Audit speichern**
+   - Je Cluster `cohesion`, `bridge_score`, `topic_purity` berechnen.
+   - Niedrige Qualität als `needsManualClusterReview` markieren, statt diese Cluster als Kontext für Korrekturvorschläge zu verwenden.
+
+4. **Bild-/Asset-Pfad inhaltlich härten**
+   - Bei bildreferenzierten Fragen ohne Asset weiterhin `cannot_judge`, aber zusätzlich „Image-Recovery Queue“ (URL-Check, Dateiname-Matching, Duplikatvergleich) einführen.
+   - Wenn identische `imageFile`/`imageUrl` gefunden wird, als starkes Similarity-Signal für Repeat/Cluster nutzen.
+
+5. **Topic-Candidate-Layer um Alias-Mining aus echten Daten erweitern**
+   - Abkürzungen, Schreibvarianten und häufige Tippfehler aus `export.json` halbautomatisch extrahieren.
+   - Nur nach Review in die Alias-Whitelist übernehmen, damit Topic-Drift langfristig sinkt.
 
 ## Bezug zu den Zukunftszielen
 - **Rekonstruktion mangelhafter Fragen (Ziel 4):** wird erst belastbar, wenn Near-Duplicate-Erkennung sauber ist und Cluster-Purity stimmt.
 - **Neue Fragen generieren (Ziel 5):** erst sinnvoll nach stabilen Topic- und Plausibilitätsmetriken; bis dahin niedrige Priorität beibehalten.
+
+## Offene Bausteine für „produktionsreif“
+- **Versionierte Kalibrierung pro Fach:** Schwellwerte + Metriken je Fachversion speichern, damit Änderungen reproduzierbar bleiben.
+- **Failure-Budgets:** maximale Auto-Change-Rate und maximale Topic-Drift pro Run definieren; bei Überschreitung automatisch auf Suggestion-only wechseln.
+- **Regression-Suite:** feste Mini-Sets mit bekannten Edge-Cases (fehlendes Bild, 1-basierter Index, Dubletten über Jahre), die bei jeder Änderung automatisch geprüft werden.
