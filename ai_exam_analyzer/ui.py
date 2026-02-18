@@ -175,6 +175,13 @@ def _build_args() -> SimpleNamespace:
 
     with st.sidebar:
         st.header("Einstellungen")
+        run_mode = st.radio(
+            "Modus",
+            options=["Vollständige Analyse", "Postprocessing only"],
+            index=0,
+            help="Im Postprocessing-only Modus werden nur Review/Reconstruction auf bestehendem aiAudit neu berechnet.",
+        )
+        is_postprocess_only = (run_mode == "Postprocessing only")
 
         with st.expander("📁 Datenquellen", expanded=True):
             st.caption("Datenordner (Standard für Dateiauswahl)")
@@ -330,70 +337,11 @@ def _build_args() -> SimpleNamespace:
             )
 
         with st.expander("⚙️ Pipeline", expanded=False):
-            resume = st.checkbox("Resume aktiv", value=CONFIG["RESUME"], help="Überspringt bereits abgeschlossene Fragen.")
-            limit = st.number_input("Limit (0 = alle Fragen)", min_value=0, value=int(CONFIG["LIMIT"]), help="Begrenzt die Anzahl verarbeiteter Fragen.")
             checkpoint_every = st.number_input(
                 "Checkpoint alle N Fragen",
                 min_value=1,
                 value=int(CONFIG["CHECKPOINT_EVERY"]),
                 help="Speichert regelmäßig Zwischenergebnisse.",
-            )
-            sleep_seconds = st.number_input(
-                "Pause je Frage (Sek.)",
-                min_value=0.0,
-                value=float(CONFIG["SLEEP"]),
-                step=0.05,
-                help="Kurze Pause zwischen zwei API-Aufrufen.",
-            )
-
-            pass_a_model = st.text_input("Pass A Modell", value=CONFIG["PASSA_MODEL"], help="Modell für Erstbewertung.")
-            pass_b_model = st.text_input("Pass B Modell", value=CONFIG["PASSB_MODEL"], help="Modell für Verifikation/Review.")
-            pass_a_temperature = st.number_input(
-                "Pass A Temperature",
-                min_value=0.0,
-                max_value=2.0,
-                value=float(CONFIG["PASSA_TEMPERATURE"]),
-                step=0.1,
-                help="Sampling-Temperatur für Pass A.",
-            )
-            pass_b_reasoning_effort = st.selectbox(
-                "Pass B Reasoning Effort",
-                options=["low", "medium", "high"],
-                index=["low", "medium", "high"].index(CONFIG["PASSB_REASONING_EFFORT"]),
-                help="Rechenaufwand für Pass B.",
-            )
-
-            trigger_answer_conf = st.slider(
-                "Pass B Trigger: Answer Confidence",
-                0.0,
-                1.0,
-                float(CONFIG["TRIGGER_ANSWER_CONF"]),
-                0.01,
-                help="Unterhalb dieses Werts wird Pass B ausgelöst (Antwort-Vertrauen).",
-            )
-            trigger_topic_conf = st.slider(
-                "Pass B Trigger: Topic Confidence",
-                0.0,
-                1.0,
-                float(CONFIG["TRIGGER_TOPIC_CONF"]),
-                0.01,
-                help="Unterhalb dieses Werts wird Pass B ausgelöst (Topic-Vertrauen).",
-            )
-            apply_change_min_conf_b = st.slider(
-                "Änderung anwenden ab Pass-B Confidence",
-                0.0,
-                1.0,
-                float(CONFIG["APPLY_CHANGE_MIN_CONF_B"]),
-                0.01,
-                help="Mindestvertrauen von Pass B, damit Antwortänderungen übernommen werden.",
-            )
-            low_conf_maintenance_threshold = st.slider(
-                "Wartung markieren unter Confidence",
-                0.0,
-                1.0,
-                float(CONFIG["LOW_CONF_MAINTENANCE_THRESHOLD"]),
-                0.01,
-                help="Unterhalb dieses Werts wird die Frage als Wartungsfall markiert.",
             )
 
             text_cluster_similarity = st.slider(
@@ -432,49 +380,6 @@ def _build_args() -> SimpleNamespace:
                 disabled=not enable_review_pass,
             )
 
-            enable_repeat_reconstruction = st.checkbox(
-                "Repeat-Reconstruction aktivieren",
-                value=bool(CONFIG["ENABLE_REPEAT_RECONSTRUCTION"]),
-                help="Erkennt wiederholte Fragen über Jahrgänge und ergänzt entsprechende Audit-Signale.",
-            )
-            auto_apply_repeat_reconstruction = st.checkbox(
-                "Repeat-Reconstruction Auto-Apply (nur Audit-Suggestion)",
-                value=bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"]),
-                help="Übernimmt Repeat-Vorschläge als AI-Empfehlung im Audit (ohne Datensatz-Mutation).",
-                disabled=not enable_repeat_reconstruction,
-            )
-            repeat_min_similarity = st.slider(
-                "Repeat: Min Similarity",
-                0.0,
-                1.0,
-                float(CONFIG["REPEAT_MIN_SIMILARITY"]),
-                0.01,
-                disabled=not enable_repeat_reconstruction,
-            )
-            repeat_min_anchor_conf = st.slider(
-                "Repeat: Min Anchor Confidence",
-                0.0,
-                1.0,
-                float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]),
-                0.01,
-                disabled=not enable_repeat_reconstruction,
-            )
-            repeat_min_anchor_consensus = st.number_input(
-                "Repeat: Min Anchor Consensus",
-                min_value=1,
-                value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]),
-                step=1,
-                disabled=not enable_repeat_reconstruction,
-            )
-            repeat_min_match_ratio = st.slider(
-                "Repeat: Min Match Ratio",
-                0.0,
-                1.0,
-                float(CONFIG["REPEAT_MIN_MATCH_RATIO"]),
-                0.01,
-                disabled=not enable_repeat_reconstruction,
-            )
-
             enable_reconstruction_pass = st.checkbox(
                 "Reconstruction-Pass aktivieren",
                 value=bool(CONFIG["ENABLE_RECONSTRUCTION_PASS"]),
@@ -486,27 +391,110 @@ def _build_args() -> SimpleNamespace:
                 disabled=not enable_reconstruction_pass,
             )
 
-            enable_explainer_pass = st.checkbox(
-                "Explainer-Pass aktivieren",
-                value=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
-                help="Erzeugt eine didaktische Erklärung pro Frage im Audit.",
-            )
-            explainer_model = st.text_input(
-                "Explainer Modell",
-                value=str(CONFIG["EXPLAINER_MODEL"]),
-                disabled=not enable_explainer_pass,
-            )
+            force_rerun_review = False
+            force_rerun_reconstruction = False
 
-            write_top_level = st.checkbox(
-                "Top-Level ai* Felder schreiben",
-                value=CONFIG["WRITE_TOP_LEVEL"],
-                help="Schreibt zusätzliche ai*-Felder direkt in jede Frage.",
-            )
-            debug = st.checkbox(
-                "Debug-Rohdaten speichern",
-                value=CONFIG["DEBUG"],
-                help="Speichert detaillierte Rohantworten unter aiAudit._debug.",
-            )
+            if is_postprocess_only:
+                st.caption("Postprocessing-only: nur fehlende/fehlerhafte Ergebnisse werden neu berechnet (optional erzwingen).")
+                force_rerun_review = st.checkbox(
+                    "Review immer neu berechnen",
+                    value=False,
+                    disabled=not enable_review_pass,
+                )
+                force_rerun_reconstruction = st.checkbox(
+                    "Reconstruction immer neu berechnen",
+                    value=False,
+                    disabled=not enable_reconstruction_pass,
+                )
+                st.caption("Nicht relevant in diesem Modus: Resume, Pass A/B, Repeat-Reconstruction, Explainer, Sleep/Limit.")
+                resume = False
+                limit = 0
+                sleep_seconds = 0.0
+                pass_a_model = CONFIG["PASSA_MODEL"]
+                pass_b_model = CONFIG["PASSB_MODEL"]
+                pass_a_temperature = float(CONFIG["PASSA_TEMPERATURE"])
+                pass_b_reasoning_effort = CONFIG["PASSB_REASONING_EFFORT"]
+                trigger_answer_conf = float(CONFIG["TRIGGER_ANSWER_CONF"])
+                trigger_topic_conf = float(CONFIG["TRIGGER_TOPIC_CONF"])
+                apply_change_min_conf_b = float(CONFIG["APPLY_CHANGE_MIN_CONF_B"])
+                low_conf_maintenance_threshold = float(CONFIG["LOW_CONF_MAINTENANCE_THRESHOLD"])
+                enable_repeat_reconstruction = False
+                auto_apply_repeat_reconstruction = False
+                repeat_min_similarity = float(CONFIG["REPEAT_MIN_SIMILARITY"])
+                repeat_min_anchor_conf = float(CONFIG["REPEAT_MIN_ANCHOR_CONF"])
+                repeat_min_anchor_consensus = int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"])
+                repeat_min_match_ratio = float(CONFIG["REPEAT_MIN_MATCH_RATIO"])
+                enable_explainer_pass = False
+                explainer_model = str(CONFIG["EXPLAINER_MODEL"])
+                write_top_level = bool(CONFIG["WRITE_TOP_LEVEL"])
+                debug = bool(CONFIG["DEBUG"])
+            else:
+                resume = st.checkbox("Resume aktiv", value=CONFIG["RESUME"], help="Überspringt bereits abgeschlossene Fragen.")
+                limit = st.number_input("Limit (0 = alle Fragen)", min_value=0, value=int(CONFIG["LIMIT"]), help="Begrenzt die Anzahl verarbeiteter Fragen.")
+                sleep_seconds = st.number_input(
+                    "Pause je Frage (Sek.)",
+                    min_value=0.0,
+                    value=float(CONFIG["SLEEP"]),
+                    step=0.05,
+                    help="Kurze Pause zwischen zwei API-Aufrufen.",
+                )
+                pass_a_model = st.text_input("Pass A Modell", value=CONFIG["PASSA_MODEL"], help="Modell für Erstbewertung.")
+                pass_b_model = st.text_input("Pass B Modell", value=CONFIG["PASSB_MODEL"], help="Modell für Verifikation/Review.")
+                pass_a_temperature = st.number_input(
+                    "Pass A Temperature",
+                    min_value=0.0,
+                    max_value=2.0,
+                    value=float(CONFIG["PASSA_TEMPERATURE"]),
+                    step=0.1,
+                    help="Sampling-Temperatur für Pass A.",
+                )
+                pass_b_reasoning_effort = st.selectbox(
+                    "Pass B Reasoning Effort",
+                    options=["low", "medium", "high"],
+                    index=["low", "medium", "high"].index(CONFIG["PASSB_REASONING_EFFORT"]),
+                    help="Rechenaufwand für Pass B.",
+                )
+                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(CONFIG["TRIGGER_ANSWER_CONF"]), 0.01)
+                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(CONFIG["TRIGGER_TOPIC_CONF"]), 0.01)
+                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(CONFIG["APPLY_CHANGE_MIN_CONF_B"]), 0.01)
+                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(CONFIG["LOW_CONF_MAINTENANCE_THRESHOLD"]), 0.01)
+
+                enable_repeat_reconstruction = st.checkbox(
+                    "Repeat-Reconstruction aktivieren",
+                    value=bool(CONFIG["ENABLE_REPEAT_RECONSTRUCTION"]),
+                    help="Erkennt wiederholte Fragen über Jahrgänge und ergänzt entsprechende Audit-Signale.",
+                )
+                auto_apply_repeat_reconstruction = st.checkbox(
+                    "Repeat-Reconstruction Auto-Apply (nur Audit-Suggestion)",
+                    value=bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"]),
+                    disabled=not enable_repeat_reconstruction,
+                )
+                repeat_min_similarity = st.slider("Repeat: Min Similarity", 0.0, 1.0, float(CONFIG["REPEAT_MIN_SIMILARITY"]), 0.01, disabled=not enable_repeat_reconstruction)
+                repeat_min_anchor_conf = st.slider("Repeat: Min Anchor Confidence", 0.0, 1.0, float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]), 0.01, disabled=not enable_repeat_reconstruction)
+                repeat_min_anchor_consensus = st.number_input("Repeat: Min Anchor Consensus", min_value=1, value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]), step=1, disabled=not enable_repeat_reconstruction)
+                repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, disabled=not enable_repeat_reconstruction)
+
+                enable_explainer_pass = st.checkbox(
+                    "Explainer-Pass aktivieren",
+                    value=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
+                    help="Erzeugt eine didaktische Erklärung pro Frage im Audit.",
+                )
+                explainer_model = st.text_input(
+                    "Explainer Modell",
+                    value=str(CONFIG["EXPLAINER_MODEL"]),
+                    disabled=not enable_explainer_pass,
+                )
+
+                write_top_level = st.checkbox(
+                    "Top-Level ai* Felder schreiben",
+                    value=CONFIG["WRITE_TOP_LEVEL"],
+                    help="Schreibt zusätzliche ai*-Felder direkt in jede Frage.",
+                )
+                debug = st.checkbox(
+                    "Debug-Rohdaten speichern",
+                    value=CONFIG["DEBUG"],
+                    help="Speichert detaillierte Rohantworten unter aiAudit._debug.",
+                )
 
         with st.expander("🧠 Knowledge Base", expanded=False):
             knowledge_subject_hint = st.text_input(
@@ -544,6 +532,9 @@ def _build_args() -> SimpleNamespace:
             )
 
     return SimpleNamespace(
+        postprocess_only=bool(is_postprocess_only),
+        force_rerun_review=bool(force_rerun_review),
+        force_rerun_reconstruction=bool(force_rerun_reconstruction),
         input=input_path,
         topics=topics_path,
         output=(output_path or _derive_output_path_from_input(input_path, output_folder)),
@@ -637,7 +628,8 @@ def main() -> None:
 
     args = _build_args()
 
-    start_button = st.button("Analyse starten", type="primary", use_container_width=True)
+    start_label = "Postprocessing starten" if bool(getattr(args, "postprocess_only", False)) else "Analyse starten"
+    start_button = st.button(start_label, type="primary", use_container_width=True)
 
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -645,7 +637,7 @@ def main() -> None:
     event_log = st.empty()
 
     if not start_button:
-        st.info("Setze deine Einstellungen und klicke auf **Analyse starten**.")
+        st.info(f"Setze deine Einstellungen und klicke auf **{start_label}**.")
         return
 
     if not args.api_key:
