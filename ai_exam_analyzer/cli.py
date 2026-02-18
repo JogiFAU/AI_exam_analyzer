@@ -136,6 +136,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Store raw pass outputs under aiAudit._debug")
     ap.add_argument("--no-debug", dest="debug", action="store_false",
                     help="Do not store raw pass outputs")
+
+    ap.add_argument("--postprocess-only", dest="postprocess_only", action="store_true", default=False,
+                    help="Skip Pass-A/B and rerun only optional post-processing passes on existing aiAudit output")
+    ap.add_argument("--force-rerun-review", dest="force_rerun_review", action="store_true", default=False,
+                    help="In --postprocess-only mode: rerun review pass even if reviewPass already exists")
+    ap.add_argument("--force-rerun-reconstruction", dest="force_rerun_reconstruction", action="store_true", default=False,
+                    help="In --postprocess-only mode: rerun reconstruction pass even if reconstruction already exists")
     return ap
 
 

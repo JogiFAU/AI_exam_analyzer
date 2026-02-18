@@ -100,6 +100,32 @@ python classify_topics_merged_config_fixed.py \
   --knowledge-min-score 0.06
 ```
 
+## Post-Processing auf vorhandenem Output erneut ausführen (ohne kompletten Neustart)
+
+Wenn ein Lauf inhaltlich schon plausibel ist, aber `reviewPass` oder `reconstruction` teilweise fehlgeschlagen sind,
+kannst du die optionalen Post-Processing-Schritte auf Basis eines bestehenden `...AIannotated.json` erneut laufen lassen.
+
+Beispiel:
+
+```bash
+python classify_topics_merged_config_fixed.py \
+  --input "Sample_Data/mibi_prac/output/export AIannotated.json" \
+  --topics "Sample_Data/mibi_prac/topic-tree.json" \
+  --output "Sample_Data/mibi_prac/output/export AIannotated.postprocessed.json" \
+  --postprocess-only \
+  --enable-review-pass \
+  --enable-reconstruction-pass \
+  --knowledge-zip "Sample_Data/mibi_prac/knowledge.zip" \
+  --images-zip "Sample_Data/mibi_prac/images.zip"
+```
+
+Wichtige Flags:
+- `--postprocess-only`: überspringt Pass A/B und nutzt vorhandenes `aiAudit` als Ausgangspunkt.
+- `--force-rerun-review`: erzwingt Review-Neuberechnung auch wenn `reviewPass` schon existiert.
+- `--force-rerun-reconstruction`: erzwingt Reconstruction-Neuberechnung auch wenn bereits vorhanden.
+
+Hinweis: Für bestmögliche Qualität sollten dieselben Wissens-/Bildquellen wie im Ursprungslauf eingebunden werden.
+
 ### Wichtige Optionen
 - `--knowledge-zip`: ZIP-Datei mit Fachmaterialien.
 - `--knowledge-index`: optionaler Cache der extrahierten Chunks (schneller bei Wiederholungsruns).

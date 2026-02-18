@@ -156,6 +156,22 @@ def process_questions(
 
     client = OpenAI()
 
+    if bool(getattr(args, "postprocess_only", False)):
+        rerun_postprocessing_from_output(
+            args=args,
+            client=client,
+            questions=questions,
+            container=container,
+            key_map=key_map,
+            schema_review=schema_review,
+            schema_reconstruction=schema_reconstruction,
+            cleanup_spec=cleanup_spec,
+            knowledge_base=knowledge_base,
+            image_store=image_store,
+            progress_callback=progress_callback,
+        )
+        return
+
     done = 0
     skipped = 0
     processed = 0
@@ -1131,4 +1147,169 @@ def process_questions(
         total=total_questions,
         output_path=args.output,
         message=f"Analyse abgeschlossen. Output: {args.output}",
+    )
+
+
+def rerun_postprocessing_from_output(
+    *,
+    args: Any,
+    client: Any,
+    questions: List[Dict[str, Any]],
+    container: Optional[Dict[str, Any]],
+    key_map: Dict[str, Dict[str, Any]],
+    schema_review: Dict[str, Any],
+    schema_reconstruction: Dict[str, Any],
+    cleanup_spec: Optional[Dict[str, Any]] = None,
+    knowledge_base: Optional[KnowledgeBase] = None,
+    image_store: Optional[QuestionImageStore] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> None:
+    def emit_progress(**payload: Any) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(payload)
+
+    total_questions = len(questions)
+    emit_progress(event="postprocess_only_started", stage="postprocessing", total=total_questions,
+                  message="Postprocess-only Lauf gestartet (Review/Reconstruction).")
+
+    dataset_context = build_dataset_context(
+        questions,
+        image_store=image_store,
+        knowledge_base=knowledge_base,
+        text_similarity_threshold=float(args.text_cluster_similarity),
+    )
+
+    review_done = 0
+    reconstruction_done = 0
+    skipped = 0
+
+    for i, q in enumerate(questions, start=1):
+        audit = q.get("aiAudit")
+        if not isinstance(audit, dict):
+            skipped += 1
+            continue
+
+        qid = str(q.get("id") or "")
+        external_indices = _answer_external_indices(q)
+        current = _coerce_dataset_correct_indices(q.get("correctIndices") or [], external_indices)
+        payload = build_question_payload(q, current_correct_indices=current)
+
+        question_images: List[Dict[str, Any]] = []
+        image_context: Dict[str, Any] = {"imageZipConfigured": bool(image_store is not None)}
+        if image_store is not None:
+            question_images, image_context = image_store.prepare_question_images(q)
+        payload["imageContext"] = image_context
+        payload["questionClusterContext"] = {
+            "clusterId": dataset_context.text_clusters["questionToCluster"].get(qid),
+            "clusterMembers": dataset_context.text_clusters["clusterMembers"].get(str(dataset_context.text_clusters["questionToCluster"].get(qid)), []),
+        }
+        question_image_clusters = ((dataset_context.image_clusters.get("questionImageClusters") or {}).get("questionToClusters") or {}).get(qid, [])
+        all_image_clusters = (dataset_context.image_clusters.get("questionImageClusters") or {}).get("clusters", [])
+        payload["imageClusterContext"] = {
+            "clusterIds": question_image_clusters,
+            "clusters": [c for c in all_image_clusters if c.get("clusterId") in set(question_image_clusters)],
+        }
+        payload["knowledgeImageContext"] = (dataset_context.image_clusters.get("knowledgeImageMatches") or {}).get(qid, [])
+
+        evidence_chunks: List[Dict[str, Any]] = []
+        if knowledge_base is not None:
+            evidence_chunks, _ = knowledge_base.retrieve(
+                build_query_text(payload),
+                top_k=max(1, int(args.knowledge_top_k)),
+                min_score=float(args.knowledge_min_score),
+                max_chars=max(500, int(args.knowledge_max_chars)),
+            )
+            payload["retrievedEvidence"] = evidence_chunks
+
+        if bool(getattr(args, "enable_review_pass", False)):
+            current_review = audit.get("reviewPass")
+            should_rerun_review = bool(getattr(args, "force_rerun_review", False)) or not isinstance(current_review, dict) or ("error" in current_review)
+            if should_rerun_review:
+                try:
+                    review = run_review_pass(
+                        client,
+                        payload=payload,
+                        current_audit=audit,
+                        schema=schema_review,
+                        model=args.review_model,
+                        question_images=question_images,
+                    )
+                    audit.setdefault("models", {})["review"] = args.review_model
+                    audit["reviewPass"] = review
+                    review_indices = normalize_indices(review.get("finalCorrectIndices", []), len(q.get("answers") or []), valid_indices=external_indices)
+                    if review_indices and isinstance(audit.get("answerPlausibility"), dict):
+                        audit["answerPlausibility"]["finalAiCorrectIndices"] = review_indices
+                    topic_key_review = review.get("finalTopicKey")
+                    if topic_key_review in key_map and isinstance(audit.get("topicFinal"), dict):
+                        topic_row_review = _topic_row_for_key(key_map, topic_key_review)
+                        audit["topicFinal"]["superTopic"] = topic_row_review["superTopicName"]
+                        audit["topicFinal"]["subtopic"] = topic_row_review["subtopicName"]
+                        audit["topicFinal"]["source"] = "review"
+                    review_done += 1
+                except Exception as review_exc:
+                    audit["reviewPass"] = {"error": str(review_exc)}
+
+        if bool(getattr(args, "enable_reconstruction_pass", True)):
+            current_reconstruction = audit.get("reconstruction")
+            should_rerun_reconstruction = bool(getattr(args, "force_rerun_reconstruction", False)) or not isinstance(current_reconstruction, dict) or ("error" in current_reconstruction)
+            if should_rerun_reconstruction:
+                cluster_id = (((audit.get("clusters") or {}).get("abstractionClusterId")) or ((audit.get("clusters") or {}).get("questionContentClusterId")))
+                related: List[Dict[str, Any]] = []
+                if cluster_id is not None:
+                    for other in questions:
+                        other_id = str(other.get("id") or "")
+                        if other_id == qid:
+                            continue
+                        other_audit = other.get("aiAudit") or {}
+                        other_cluster_id = ((other_audit.get("clusters") or {}).get("abstractionClusterId"))
+                        if other_cluster_id == cluster_id:
+                            related.append({
+                                "questionId": other_id,
+                                "questionText": (other.get("questionText") or "")[:280],
+                                "correctIndices": other.get("correctIndices") or [],
+                                "qualityNeedsMaintenance": bool(((other_audit.get("maintenance") or {}).get("needsMaintenance"))),
+                            })
+                        if len(related) >= 8:
+                            break
+                reconstruction_context = {
+                    "question": payload,
+                    "aiAudit": audit,
+                    "relatedClusterQuestions": related,
+                    "retrievedEvidence": evidence_chunks,
+                    "hasAltfrageKeyword": ("altfrage" in (str(q.get("questionText") or "").lower())),
+                }
+                try:
+                    rec = run_reconstruction_pass(
+                        client,
+                        payload=reconstruction_context,
+                        schema=schema_reconstruction,
+                        model=args.reconstruction_model,
+                    )
+                    audit["reconstruction"] = rec
+                    reconstruction_done += 1
+                except Exception as rec_exc:
+                    audit["reconstruction"] = {"error": str(rec_exc)}
+
+        if args.write_top_level and isinstance(audit.get("topicFinal"), dict) and isinstance(audit.get("maintenance"), dict):
+            q["aiSuperTopic"] = audit["topicFinal"].get("superTopic")
+            q["aiSubtopic"] = audit["topicFinal"].get("subtopic")
+            q["aiTopicConfidence"] = audit["topicFinal"].get("confidence")
+            q["aiNeedsMaintenance"] = audit["maintenance"].get("needsMaintenance")
+            q["aiMaintenanceSeverity"] = audit["maintenance"].get("severity")
+            q["aiMaintenanceReasons"] = audit["maintenance"].get("reasons")
+
+        if args.checkpoint_every and i % args.checkpoint_every == 0:
+            out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
+            save_json(args.output, out_obj)
+
+    out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
+    save_json(args.output, out_obj)
+    emit_progress(
+        event="postprocess_only_finished",
+        stage="postprocessing",
+        total=total_questions,
+        done=review_done + reconstruction_done,
+        skipped=skipped,
+        message=f"Postprocess-only abgeschlossen (review aktualisiert: {review_done}, reconstruction aktualisiert: {reconstruction_done}, ohne aiAudit: {skipped}).",
     )
