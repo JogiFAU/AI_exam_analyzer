@@ -9,6 +9,7 @@ import streamlit as st
 from ai_exam_analyzer.config import CONFIG
 from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.io_utils import load_json
+from ai_exam_analyzer.model_profiles import apply_model_optimized_defaults
 from ai_exam_analyzer.knowledge_base import (
     build_knowledge_base_from_zip,
     load_index_json,
@@ -334,13 +335,25 @@ def _build_args() -> SimpleNamespace:
             st.session_state["knowledge_subject_hint_last_default"] = subject_hint_default
 
         with st.expander("🔐 API", expanded=True):
-            api_key_value = os.getenv("OPENAI_API_KEY", "")
+            llm_provider = st.selectbox(
+                "LLM Provider",
+                options=["openai", "gemini"],
+                index=0 if CONFIG["LLM_PROVIDER"] == "openai" else 1,
+                help="Wählt den verwendeten Modellanbieter für den gesamten Workflow.",
+            )
+            key_env = "OPENAI_API_KEY" if llm_provider == "openai" else "GEMINI_API_KEY"
+            api_key_value = os.getenv(key_env, "")
             api_key = st.text_input(
-                "OpenAI API Key",
+                f"{llm_provider.title()} API Key",
                 type="password",
                 value=api_key_value,
-                help="API-Key für den Zugriff auf die OpenAI-Modelle.",
+                help="API-Key für den Zugriff auf die gewählten Modelle.",
             )
+            default_pass_a_model = CONFIG["PASSA_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSA_MODEL"]
+            default_pass_b_model = CONFIG["PASSB_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSB_MODEL"]
+            default_review_model = CONFIG["REVIEW_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["REVIEW_MODEL"]
+            default_reconstruction_model = CONFIG["RECONSTRUCTION_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["RECONSTRUCTION_MODEL"]
+            default_explainer_model = CONFIG["EXPLAINER_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["EXPLAINER_MODEL"]
 
         with st.expander("⚙️ Pipeline", expanded=False):
             checkpoint_every = st.number_input(
@@ -374,7 +387,7 @@ def _build_args() -> SimpleNamespace:
             )
             review_model = st.text_input(
                 "Pass C Modell",
-                value=CONFIG["REVIEW_MODEL"],
+                value=default_review_model,
                 help="Modell für den optionalen Deep-Review-Pass.",
                 disabled=not enable_review_pass,
             )
@@ -393,7 +406,7 @@ def _build_args() -> SimpleNamespace:
             )
             reconstruction_model = st.text_input(
                 "Reconstruction Modell",
-                value=str(CONFIG["RECONSTRUCTION_MODEL"]),
+                value=str(default_reconstruction_model),
                 disabled=not enable_reconstruction_pass,
             )
 
@@ -416,8 +429,8 @@ def _build_args() -> SimpleNamespace:
                 resume = False
                 limit = 0
                 sleep_seconds = 0.0
-                pass_a_model = CONFIG["PASSA_MODEL"]
-                pass_b_model = CONFIG["PASSB_MODEL"]
+                pass_a_model = default_pass_a_model
+                pass_b_model = default_pass_b_model
                 pass_a_temperature = float(CONFIG["PASSA_TEMPERATURE"])
                 pass_b_reasoning_effort = CONFIG["PASSB_REASONING_EFFORT"]
                 trigger_answer_conf = float(CONFIG["TRIGGER_ANSWER_CONF"])
@@ -431,7 +444,7 @@ def _build_args() -> SimpleNamespace:
                 repeat_min_anchor_consensus = int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"])
                 repeat_min_match_ratio = float(CONFIG["REPEAT_MIN_MATCH_RATIO"])
                 enable_explainer_pass = False
-                explainer_model = str(CONFIG["EXPLAINER_MODEL"])
+                explainer_model = str(default_explainer_model)
                 write_top_level = bool(CONFIG["WRITE_TOP_LEVEL"])
                 debug = bool(CONFIG["DEBUG"])
             else:
@@ -444,8 +457,8 @@ def _build_args() -> SimpleNamespace:
                     step=0.05,
                     help="Kurze Pause zwischen zwei API-Aufrufen.",
                 )
-                pass_a_model = st.text_input("Pass A Modell", value=CONFIG["PASSA_MODEL"], help="Modell für Erstbewertung.")
-                pass_b_model = st.text_input("Pass B Modell", value=CONFIG["PASSB_MODEL"], help="Modell für Verifikation/Review.")
+                pass_a_model = st.text_input("Pass A Modell", value=default_pass_a_model, help="Modell für Erstbewertung.")
+                pass_b_model = st.text_input("Pass B Modell", value=default_pass_b_model, help="Modell für Verifikation/Review.")
                 pass_a_temperature = st.number_input(
                     "Pass A Temperature",
                     min_value=0.0,
@@ -487,7 +500,7 @@ def _build_args() -> SimpleNamespace:
                 )
                 explainer_model = st.text_input(
                     "Explainer Modell",
-                    value=str(CONFIG["EXPLAINER_MODEL"]),
+                    value=str(default_explainer_model),
                     disabled=not enable_explainer_pass,
                 )
 
@@ -546,6 +559,7 @@ def _build_args() -> SimpleNamespace:
         topics=topics_path,
         output=(output_path or _derive_output_path_from_input(input_path, output_folder)),
         api_key=api_key,
+        llm_provider=llm_provider,
         resume=resume,
         limit=int(limit),
         checkpoint_every=int(checkpoint_every),
@@ -634,6 +648,7 @@ def main() -> None:
     st.caption("Konfiguration, API-Key und Live-Analysefortschritt in einer Oberfläche.")
 
     args = _build_args()
+    apply_model_optimized_defaults(args)
 
     start_label = "Postprocessing starten" if bool(getattr(args, "postprocess_only", False)) else "Analyse starten"
     start_button = st.button(start_label, type="primary", use_container_width=True)
@@ -648,10 +663,11 @@ def main() -> None:
         return
 
     if not args.api_key:
-        st.error("Bitte gib einen OpenAI API Key ein.")
+        st.error("Bitte gib einen API Key ein.")
         return
 
-    os.environ["OPENAI_API_KEY"] = args.api_key
+    env_name = "OPENAI_API_KEY" if args.llm_provider == "openai" else "GEMINI_API_KEY"
+    os.environ[env_name] = args.api_key
 
     try:
         topic_tree = load_json(args.topics)
