@@ -6,6 +6,7 @@ import os
 from ai_exam_analyzer.config import CONFIG
 from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.io_utils import load_json
+from ai_exam_analyzer.model_profiles import apply_model_optimized_defaults
 from ai_exam_analyzer.knowledge_base import (
     build_knowledge_base_from_zip,
     load_index_json,
@@ -39,6 +40,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Save after every N processed questions")
     ap.add_argument("--sleep", type=float, default=CONFIG["SLEEP"], help="Sleep seconds between questions")
 
+    ap.add_argument("--llm-provider", default=CONFIG["LLM_PROVIDER"], choices=["openai", "gemini"],
+                    help="LLM provider for all passes")
     ap.add_argument("--passA-model", default=CONFIG["PASSA_MODEL"])
     ap.add_argument("--passB-model", default=CONFIG["PASSB_MODEL"])
     ap.add_argument("--passA-temperature", type=float, default=CONFIG["PASSA_TEMPERATURE"])
@@ -206,8 +209,27 @@ def main() -> None:
     args = build_parser().parse_args()
     args.output = _derive_output_path(args.input, args.output)
 
-    if not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("OPENAI_API_KEY environment variable is not set.")
+    provider = str(args.llm_provider or "openai").strip().lower()
+    if provider == "openai":
+        if not os.getenv("OPENAI_API_KEY"):
+            raise RuntimeError("OPENAI_API_KEY environment variable is not set.")
+    elif provider == "gemini":
+        if not os.getenv("GEMINI_API_KEY"):
+            raise RuntimeError("GEMINI_API_KEY environment variable is not set.")
+
+    if provider == "gemini" and args.passA_model == CONFIG["PASSA_MODEL"]:
+        args.passA_model = CONFIG["PASSA_MODEL_GEMINI"]
+    if provider == "gemini" and args.passB_model == CONFIG["PASSB_MODEL"]:
+        args.passB_model = CONFIG["PASSB_MODEL_GEMINI"]
+
+    if provider == "gemini" and args.review_model == CONFIG["REVIEW_MODEL"]:
+        args.review_model = CONFIG["REVIEW_MODEL_GEMINI"]
+    if provider == "gemini" and args.reconstruction_model == CONFIG["RECONSTRUCTION_MODEL"]:
+        args.reconstruction_model = CONFIG["RECONSTRUCTION_MODEL_GEMINI"]
+    if provider == "gemini" and args.explainer_model == CONFIG["EXPLAINER_MODEL"]:
+        args.explainer_model = CONFIG["EXPLAINER_MODEL_GEMINI"]
+
+    apply_model_optimized_defaults(args)
 
     topic_tree = load_json(args.topics)
     catalog, key_map = build_topic_catalog(topic_tree)

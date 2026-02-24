@@ -1,6 +1,6 @@
 # AI Exam Analyzer
 
-Dieses Projekt prüft Fragen-/Antwort-Daten über die OpenAI API inhaltlich und ergänzt die Ergebnisse in einer neuen JSON-Datei.
+Dieses Projekt prüft Fragen-/Antwort-Daten über die OpenAI- oder Gemini-API inhaltlich und ergänzt die Ergebnisse in einer neuen JSON-Datei.
 
 ## Struktur
 
@@ -9,6 +9,8 @@ Dieses Projekt prüft Fragen-/Antwort-Daten über die OpenAI API inhaltlich und 
 - `ai_exam_analyzer/processor.py`: Hauptverarbeitung je Frage.
 - `ai_exam_analyzer/passes.py`: Pass A / Pass B Prompt- und Lauf-Logik.
 - `ai_exam_analyzer/openai_client.py`: OpenAI Responses API Wrapper mit JSON-Schema.
+- `ai_exam_analyzer/llm_clients.py`: Provider-Abstraktion (OpenAI + Gemini-Adapter).
+- `ai_exam_analyzer/model_profiles.py`: Modellabhängige Workflow-Optimierung (u. a. Knowledge-Retrieval-Budget).
 - `ai_exam_analyzer/schemas.py`: Structured-Output-Schemata.
 - `ai_exam_analyzer/topic_catalog.py`: Topic-Katalog und Prompt-Formatierung.
 - `ai_exam_analyzer/payload.py`: Nutzdatenaufbereitung pro Frage.
@@ -41,6 +43,35 @@ Der Grenzwert ist per CLI konfigurierbar:
 ```bash
 --low-conf-maintenance-threshold 0.65
 ```
+
+## Gemini-v2 Planung
+
+Ein konkreter Migrationsplan für eine zweite Version mit Gemini (inkl. Branch-Strategie, Code-Refactoring und Risikoabschätzung) ist hier dokumentiert:
+
+- `docs/gemini-migration-plan.md`
+- `docs/gemini-workflow-research.md`
+
+## Provider auswählen (OpenAI oder Gemini)
+
+CLI-weit kann der LLM-Provider gewählt werden:
+
+```bash
+--llm-provider openai   # Standard
+--llm-provider gemini
+```
+
+API-Key je Provider:
+- OpenAI: `OPENAI_API_KEY`
+- Gemini: `GEMINI_API_KEY`
+
+Bei Gemini werden die Retrieval-Parameter der Knowledge-Base automatisch an größere Kontextfenster angepasst
+(höheres `knowledge-top-k` und `knowledge-max-chars`, konservativere Min-Score-Schwelle).
+
+Für Gemini wird zusätzlich ein adaptiver Workflow aktiviert:
+- adaptive zweite Retrieval-Stufe bei niedriger Retrieval-Qualität,
+- konservativer Auto-Change-Guard im Preprocessing bei schwacher Evidenz,
+- erzwungene Pass-B-Verifikation bei niedriger Retrieval-Qualität,
+- provider-spezifische Modelldefaults auch für Review/Reconstruction/Explainer.
 
 ## Ausführen
 

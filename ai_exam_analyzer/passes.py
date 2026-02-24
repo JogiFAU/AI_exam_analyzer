@@ -3,12 +3,13 @@
 import json
 from typing import Any, Dict, List
 
-from ai_exam_analyzer.openai_client import call_json_schema
+from ai_exam_analyzer.llm_clients import call_json_schema
 
 
 def run_pass_a(
     client: Any,
     *,
+    provider: str = "openai",
     topic_catalog_text: str,
     payload: Dict[str, Any],
     schema: Dict[str, Any],
@@ -16,6 +17,14 @@ def run_pass_a(
     temperature: float,
     question_images: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
+    provider_norm = (provider or "openai").strip().lower()
+    provider_hint = (
+        "\nGemini-spezifische Leitlinien:\n"
+        "- Verarbeite lange Evidenzblöcke global-konsistent (nicht nur lokale Schlüsselwörter).\n"
+        "- Priorisiere Evidenz-Konsens über mehrere Chunks/Quellen vor Einzelhinweisen.\n"
+        "- Bei widersprüchlicher Evidenz: konservative Entscheidung + needsMaintenance=true.\n"
+    ) if provider_norm == "gemini" else ""
+
     system = (
         "Du bist ein strenger Prüfungsfragen-Analyst und Klassifikator.\n"
         "Arbeitsablauf:\n"
@@ -35,6 +44,7 @@ def run_pass_a(
         "- proposedCorrectIndices/verifiedCorrectIndices/finalCorrectIndices verwenden answerIndex (1-basiert), nicht Array-Position.\n"
         "- Wenn Bild erwartet wird, aber fehlt: needsMaintenance=true.\n"
         "- Antworte ausschließlich im vorgegebenen JSON-Schema.\n\n"
+        f"{provider_hint}"
         f"{topic_catalog_text}"
     )
     user = [{"type": "input_text", "text": json.dumps(payload, ensure_ascii=False)}] + question_images
@@ -53,6 +63,7 @@ def run_pass_a(
 def run_pass_b(
     client: Any,
     *,
+    provider: str = "openai",
     topic_catalog_text: str,
     payload: Dict[str, Any],
     pass_a: Dict[str, Any],
@@ -61,6 +72,13 @@ def run_pass_b(
     reasoning_effort: str,
     question_images: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
+    provider_norm = (provider or "openai").strip().lower()
+    provider_hint = (
+        "\nGemini-Verifikation:\n"
+        "- Behandle retrievedEvidence als mehrstufige Evidenzkette (Chunk-übergreifend).\n"
+        "- Bei geringer RetrievalQuality priorisiere cannotJudge statt spekulativer Entscheidung.\n"
+    ) if provider_norm == "gemini" else ""
+
     system = (
         "Du bist ein unabhängiger Verifier.\n"
         "Du bekommst eine Prüfungsfrage + Pass A Ergebnis.\n"
@@ -69,6 +87,7 @@ def run_pass_b(
         "Berücksichtige Bildähnlichkeits-Hinweise aus knowledgeImageContext zwingend.\n"
         "Wenn Bild fehlt oder Fall unentscheidbar: cannotJudge=true und Wartungsbedarf markieren.\n"
         "Antworte ausschließlich im JSON-Schema.\n\n"
+        f"{provider_hint}"
         f"{topic_catalog_text}"
     )
     packed = {"question": payload, "passA": pass_a}
