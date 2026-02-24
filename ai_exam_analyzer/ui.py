@@ -385,6 +385,11 @@ def _build_args() -> SimpleNamespace:
                 default_max_chars=int(CONFIG["KNOWLEDGE_MAX_CHARS"]),
                 default_min_score=float(CONFIG["KNOWLEDGE_MIN_SCORE"]),
             )
+            default_pass_a_model = CONFIG["PASSA_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSA_MODEL"]
+            default_pass_b_model = CONFIG["PASSB_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSB_MODEL"]
+            default_review_model = CONFIG["REVIEW_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["REVIEW_MODEL"]
+            default_reconstruction_model = CONFIG["RECONSTRUCTION_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["RECONSTRUCTION_MODEL"]
+            default_explainer_model = CONFIG["EXPLAINER_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["EXPLAINER_MODEL"]
 
         with st.expander("⚙️ Pipeline", expanded=False):
             checkpoint_every = st.number_input(
