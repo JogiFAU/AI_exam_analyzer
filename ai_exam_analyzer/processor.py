@@ -23,6 +23,8 @@ from ai_exam_analyzer.decision_policy import compose_confidence, should_apply_pa
 from ai_exam_analyzer.preprocessing import compute_preprocessing_assessment
 from ai_exam_analyzer.topic_candidates import TopicCandidateIndex
 from ai_exam_analyzer.repeat_reconstruction import compute_repeat_reconstruction
+from ai_exam_analyzer.llm_clients import build_llm_client
+from ai_exam_analyzer.workflow_profiles import build_workflow_profile
 
 
 def _answer_external_indices(q: Dict[str, Any]) -> List[int]:
@@ -100,6 +102,59 @@ def _build_output_obj(
 
 
 
+
+
+
+def _retrieve_evidence_with_profile(
+    *,
+    knowledge_base: Optional[KnowledgeBase],
+    query_payload: Dict[str, Any],
+    args: Any,
+    workflow_profile: Any,
+) -> Dict[str, Any]:
+    out = {
+        "chunks": [],
+        "retrievalQuality": 0.0,
+        "strategy": "disabled" if knowledge_base is None else "single_pass",
+    }
+    if knowledge_base is None:
+        return out
+
+    query_text = build_query_text(query_payload)
+    base_top_k = max(1, int(getattr(args, "knowledge_top_k", 6)))
+    base_min_score = float(getattr(args, "knowledge_min_score", 0.06))
+    base_max_chars = max(500, int(getattr(args, "knowledge_max_chars", 4000)))
+
+    chunks, quality = knowledge_base.retrieve(
+        query_text,
+        top_k=base_top_k,
+        min_score=base_min_score,
+        max_chars=base_max_chars,
+    )
+
+    out["chunks"] = chunks
+    out["retrievalQuality"] = quality
+
+    should_retry = (
+        getattr(workflow_profile, "provider", "openai") == "gemini"
+        and float(quality) < float(getattr(workflow_profile, "retrieval_quality_target", 0.0))
+    )
+    if should_retry:
+        out["strategy"] = "gemini_expanded_retry"
+        retry_top_k = base_top_k + int(getattr(workflow_profile, "retrieval_retry_top_k_boost", 0))
+        retry_max_chars = base_max_chars + int(getattr(workflow_profile, "retrieval_retry_char_boost", 0))
+        retry_min_score = max(0.0, base_min_score * float(getattr(workflow_profile, "retrieval_retry_min_score_factor", 1.0)))
+        retry_chunks, retry_quality = knowledge_base.retrieve(
+            query_text,
+            top_k=max(1, retry_top_k),
+            min_score=retry_min_score,
+            max_chars=max(500, retry_max_chars),
+        )
+        if retry_chunks and retry_quality > quality:
+            out["chunks"] = retry_chunks
+            out["retrievalQuality"] = retry_quality
+
+    return out
 
 def _compact_evidence(evidence_chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     compact: List[Dict[str, Any]] = []
@@ -343,12 +398,9 @@ def process_questions(
     image_store: Optional[QuestionImageStore] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> None:
-    try:
-        from openai import OpenAI
-    except ModuleNotFoundError as exc:
-        raise RuntimeError("Missing dependency: install `openai` package (e.g. `pip install openai`).") from exc
-
-    client = OpenAI()
+    provider = str(getattr(args, "llm_provider", "openai") or "openai")
+    workflow_profile = build_workflow_profile(provider)
+    client = build_llm_client(provider=provider)
     selected_question_ids = {str(x).strip() for x in (getattr(args, "only_question_ids", []) or []) if str(x).strip()}
 
     if bool(getattr(args, "postprocess_only", False)):
@@ -517,16 +569,18 @@ def process_questions(
         }
         payload["knowledgeImageContext"] = (dataset_context.image_clusters.get("knowledgeImageMatches") or {}).get(qid, [])
 
-        evidence_chunks: List[Dict[str, Any]] = []
-        retrieval_quality = 0.0
+        retrieval_out = _retrieve_evidence_with_profile(
+            knowledge_base=knowledge_base,
+            query_payload=payload,
+            args=args,
+            workflow_profile=workflow_profile,
+        )
+        evidence_chunks = list(retrieval_out["chunks"])
+        retrieval_quality = float(retrieval_out["retrievalQuality"])
+        retrieval_strategy = str(retrieval_out["strategy"])
         if knowledge_base is not None:
-            evidence_chunks, retrieval_quality = knowledge_base.retrieve(
-                build_query_text(payload),
-                top_k=max(1, int(args.knowledge_top_k)),
-                min_score=float(args.knowledge_min_score),
-                max_chars=max(500, int(args.knowledge_max_chars)),
-            )
             payload["retrievedEvidence"] = evidence_chunks
+            payload["retrievalStrategy"] = retrieval_strategy
 
         emit_progress(
             event="question_context_ready",
@@ -537,6 +591,7 @@ def process_questions(
             done=done,
             skipped=skipped,
             retrieval_quality=retrieval_quality,
+            retrieval_strategy=retrieval_strategy,
             evidence_count=len(evidence_chunks),
             message=f"Frage {i}/{total_questions}: Kontext bereit (evidence={len(evidence_chunks)}).",
         )
@@ -555,7 +610,16 @@ def process_questions(
         )
         preprocessing = compute_preprocessing_assessment(q)
         pre_maintenance_reasons = preprocessing.get("reasons", [])
-        gates = preprocessing.get("gates") or {}
+        gates = dict(preprocessing.get("gates") or {})
+
+        if workflow_profile.provider == "gemini" and knowledge_base is not None and retrieval_quality < float(workflow_profile.force_pass_b_retrieval_threshold):
+            # Gemini kann viel Kontext verarbeiten; wenn Retrieval trotzdem schwach ist,
+            # reduzieren wir riskante Auto-Änderungen im Preprocessing.
+            gates["allowAutoChange"] = False
+            pre_maintenance_reasons = list(dict.fromkeys(list(pre_maintenance_reasons) + ["gemini_low_retrieval_guard"]))
+
+        preprocessing["gates"] = gates
+        preprocessing["reasons"] = pre_maintenance_reasons
         if not bool(gates.get("runLlm", True)):
             report["preprocessing"]["runLlmFalse"] += 1
         if not bool(gates.get("allowAutoChange", True)):
@@ -566,7 +630,7 @@ def process_questions(
         audit: Dict[str, Any] = {
             "pipelineVersion": PIPELINE_VERSION,
             "status": "error",
-            "models": {"passA": args.passA_model, "passB": None, "review": None},
+            "models": {"provider": provider, "passA": args.passA_model, "passB": None, "review": None},
             "knowledge": {
                 "enabled": bool(knowledge_base is not None),
                 "retrievalQuality": retrieval_quality,
@@ -632,6 +696,7 @@ def process_questions(
             )
             pass_a = run_pass_a(
                 client,
+                provider=provider,
                 topic_catalog_text=topic_catalog_text,
                 payload=payload,
                 schema=schema_a,
@@ -692,7 +757,8 @@ def process_questions(
 
             ran_b_base = should_run_pass_b(pass_a, args.trigger_answer_conf, args.trigger_topic_conf)
             candidate_force_b = candidate_conflict and pass_a_topic_conf < float(getattr(args, "topic_candidate_outside_force_passb_conf", 0.92))
-            ran_b = bool(ran_b_base or candidate_force_b)
+            low_retrieval_force_b = bool(workflow_profile.force_pass_b_when_low_retrieval and retrieval_quality < float(workflow_profile.force_pass_b_retrieval_threshold))
+            ran_b = bool(ran_b_base or candidate_force_b or low_retrieval_force_b)
             if candidate_force_b:
                 report["topicCandidates"]["passBTriggeredByCandidateConflict"] += 1
 
@@ -712,6 +778,7 @@ def process_questions(
                     )
                     pass_b = run_pass_b(
                         client,
+                        provider=provider,
                         topic_catalog_text=topic_catalog_text,
                         payload=payload,
                         pass_a=pass_a,
@@ -1277,12 +1344,13 @@ def process_questions(
             )
             evidence_chunks: List[Dict[str, Any]] = []
             if knowledge_base is not None:
-                evidence_chunks, _ = knowledge_base.retrieve(
-                    build_query_text(payload_tmp),
-                    top_k=max(1, int(args.knowledge_top_k)),
-                    min_score=float(args.knowledge_min_score),
-                    max_chars=max(500, int(args.knowledge_max_chars)),
+                retrieval_out = _retrieve_evidence_with_profile(
+                    knowledge_base=knowledge_base,
+                    query_payload=payload_tmp,
+                    args=args,
+                    workflow_profile=workflow_profile,
                 )
+                evidence_chunks = list(retrieval_out["chunks"])
 
             reconstruction_context = {
                 "question": payload_tmp,
@@ -1428,13 +1496,14 @@ def process_questions(
                 "reconstruction": (audit.get("reconstruction") or {}),
             }
             if knowledge_base is not None:
-                evidence_chunks, _ = knowledge_base.retrieve(
-                    build_query_text(payload_tmp),
-                    top_k=max(1, int(args.knowledge_top_k)),
-                    min_score=float(args.knowledge_min_score),
-                    max_chars=max(500, int(args.knowledge_max_chars)),
+                retrieval_out = _retrieve_evidence_with_profile(
+                    knowledge_base=knowledge_base,
+                    query_payload=payload_tmp,
+                    args=args,
+                    workflow_profile=workflow_profile,
                 )
-                payload_tmp["retrievedEvidence"] = evidence_chunks
+                payload_tmp["retrievedEvidence"] = list(retrieval_out["chunks"])
+                payload_tmp["retrievalStrategy"] = str(retrieval_out["strategy"])
             try:
                 expl = run_explainer_pass(
                     client,
@@ -1551,6 +1620,9 @@ def rerun_postprocessing_from_output(
     image_store: Optional[QuestionImageStore] = None,
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> None:
+    provider = str(getattr(args, "llm_provider", "openai") or "openai")
+    workflow_profile = build_workflow_profile(provider)
+
     def emit_progress(**payload: Any) -> None:
         if progress_callback is None:
             return
@@ -1652,14 +1724,20 @@ def rerun_postprocessing_from_output(
         payload["knowledgeImageContext"] = (dataset_context.image_clusters.get("knowledgeImageMatches") or {}).get(qid, [])
 
         evidence_chunks: List[Dict[str, Any]] = []
+        retrieval_quality = 0.0
+        retrieval_strategy = "disabled" if knowledge_base is None else "single_pass"
         if knowledge_base is not None:
-            evidence_chunks, _ = knowledge_base.retrieve(
-                build_query_text(payload),
-                top_k=max(1, int(args.knowledge_top_k)),
-                min_score=float(args.knowledge_min_score),
-                max_chars=max(500, int(args.knowledge_max_chars)),
+            retrieval_out = _retrieve_evidence_with_profile(
+                knowledge_base=knowledge_base,
+                query_payload=payload,
+                args=args,
+                workflow_profile=workflow_profile,
             )
+            evidence_chunks = list(retrieval_out["chunks"])
+            retrieval_quality = float(retrieval_out["retrievalQuality"])
+            retrieval_strategy = str(retrieval_out["strategy"])
             payload["retrievedEvidence"] = evidence_chunks
+            payload["retrievalStrategy"] = retrieval_strategy
 
         if bool(getattr(args, "enable_review_pass", False)):
             current_review = audit.get("reviewPass")

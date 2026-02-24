@@ -8,8 +8,11 @@ CONFIG = {
     "LIMIT": 0,
     "CHECKPOINT_EVERY": 10,
     "SLEEP": 0.15,
+    "LLM_PROVIDER": "openai",
     "PASSA_MODEL": "gpt-4.1-mini",
     "PASSB_MODEL": "o4-mini",
+    "PASSA_MODEL_GEMINI": "gemini-2.5-flash",
+    "PASSB_MODEL_GEMINI": "gemini-2.5-pro",
     "PASSA_TEMPERATURE": 0.0,
     "PASSB_REASONING_EFFORT": "high",
     "TRIGGER_ANSWER_CONF": 0.80,
@@ -31,6 +34,7 @@ CONFIG = {
     "ABSTRACTION_CLUSTER_SIMILARITY": 0.22,
     "ENABLE_REVIEW_PASS": False,
     "REVIEW_MODEL": "o4-mini",
+    "REVIEW_MODEL_GEMINI": "gemini-2.5-pro",
     "REVIEW_MIN_MAINTENANCE_SEVERITY": 2,
     "TOPIC_CANDIDATE_TOP_K": 3,
     "RUN_REPORT_PATH": "",
@@ -44,6 +48,7 @@ CONFIG = {
 
     "ENABLE_RECONSTRUCTION_PASS": True,
     "RECONSTRUCTION_MODEL": "o4-mini",
+    "RECONSTRUCTION_MODEL_GEMINI": "gemini-2.5-pro",
     "ENABLE_EXPLAINER_PASS": False,
     "ENABLE_LLM_ABSTRACTION_CLUSTER_REFINEMENT": False,
     "CLUSTER_REFINEMENT_MODEL": "o4-mini",
@@ -51,6 +56,7 @@ CONFIG = {
     "CLUSTER_REFINEMENT_MIN_CLUSTER_SIZE": 2,
     "CLUSTER_REFINEMENT_MERGE_CANDIDATES": 5,
     "EXPLAINER_MODEL": "gpt-4.1-mini",
+    "EXPLAINER_MODEL_GEMINI": "gemini-2.5-flash",
 }
 
 PIPELINE_VERSION = "2pass-merged-v9-annotate-only-reconstruct-explain"
