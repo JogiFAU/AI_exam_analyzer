@@ -309,6 +309,26 @@ def _build_args() -> SimpleNamespace:
                 require_existing=False,
             ) if is_tuning_only else analysis_config_path
 
+            if (not is_tuning_only) and (not is_postprocess_only) and analysis_config_path and os.path.exists(analysis_config_path):
+                try:
+                    loaded_cfg = load_json(analysis_config_path)
+                    if isinstance(loaded_cfg, dict):
+                        provider_prefix = str(st.session_state.get("llm_provider", "openai"))
+                        cfg_to_widget = {
+                            "trigger_answer_conf": f"{provider_prefix}_trigger_answer_conf",
+                            "trigger_topic_conf": f"{provider_prefix}_trigger_topic_conf",
+                            "apply_change_min_conf_b": f"{provider_prefix}_apply_change_min_conf_b",
+                            "low_conf_maintenance_threshold": f"{provider_prefix}_low_conf_maintenance_threshold",
+                            "knowledge_top_k": f"{provider_prefix}_knowledge_top_k",
+                            "knowledge_max_chars": f"{provider_prefix}_knowledge_max_chars",
+                            "knowledge_min_score": f"{provider_prefix}_knowledge_min_score",
+                        }
+                        for ck, wk in cfg_to_widget.items():
+                            if ck in loaded_cfg:
+                                st.session_state[wk] = loaded_cfg[ck]
+                except Exception:
+                    pass
+
             cleanup_spec = ""
 
             images_default_path = _resolve_path(folder=data_folder, filename=images_zip_default_name)
@@ -412,22 +432,9 @@ def _build_args() -> SimpleNamespace:
             default_review_model = CONFIG["REVIEW_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["REVIEW_MODEL"]
             default_reconstruction_model = CONFIG["RECONSTRUCTION_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["RECONSTRUCTION_MODEL"]
             default_explainer_model = CONFIG["EXPLAINER_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["EXPLAINER_MODEL"]
-
-        auto_dataset_tuning = False
-        if not is_postprocess_only:
-            tuning_mode = st.radio(
-                "Parameterauswahl",
-                options=["Vollautomatisch (KI)", "Manuell"],
-                index=0 if st.session_state.get("tuning_mode", "Vollautomatisch (KI)") == "Vollautomatisch (KI)" else 1,
-                horizontal=True,
-                help="Automatisch sperrt die manuellen Pipeline-Einstellungen für diesen Lauf.",
-            )
-            st.session_state["tuning_mode"] = tuning_mode
-            auto_dataset_tuning = tuning_mode == "Vollautomatisch (KI)"
+        auto_dataset_tuning = bool(is_tuning_only)
 
         with st.expander("⚙️ Pipeline", expanded=False):
-            if auto_dataset_tuning and not is_postprocess_only:
-                st.info("Automatik aktiv: Manuelle Pipeline-Einstellungen sind für diesen Lauf gesperrt.")
             checkpoint_every = st.number_input(
                 "Checkpoint alle N Fragen",
                 min_value=1,
@@ -549,10 +556,10 @@ def _build_args() -> SimpleNamespace:
                     help="Rechenaufwand für Pass B.",
                     disabled=auto_dataset_tuning,
                 )
-                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf", disabled=auto_dataset_tuning)
-                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf", disabled=auto_dataset_tuning)
-                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b", disabled=auto_dataset_tuning)
-                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold", disabled=auto_dataset_tuning)
+                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf")
+                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf")
+                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b")
+                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold")
 
                 enable_repeat_reconstruction = st.checkbox(
                     "Repeat-Reconstruction aktivieren",
@@ -563,12 +570,12 @@ def _build_args() -> SimpleNamespace:
                 auto_apply_repeat_reconstruction = st.checkbox(
                     "Repeat-Reconstruction Auto-Apply (nur Audit-Suggestion)",
                     value=bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"]),
-                    disabled=(not enable_repeat_reconstruction) or auto_dataset_tuning,
+                    disabled=(not enable_repeat_reconstruction),
                 )
-                repeat_min_similarity = st.slider("Repeat: Min Similarity", 0.0, 1.0, float(CONFIG["REPEAT_MIN_SIMILARITY"]), 0.01, disabled=(not enable_repeat_reconstruction) or auto_dataset_tuning)
-                repeat_min_anchor_conf = st.slider("Repeat: Min Anchor Confidence", 0.0, 1.0, float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]), 0.01, disabled=(not enable_repeat_reconstruction) or auto_dataset_tuning)
-                repeat_min_anchor_consensus = st.number_input("Repeat: Min Anchor Consensus", min_value=1, value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]), step=1, disabled=(not enable_repeat_reconstruction) or auto_dataset_tuning)
-                repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, disabled=(not enable_repeat_reconstruction) or auto_dataset_tuning)
+                repeat_min_similarity = st.slider("Repeat: Min Similarity", 0.0, 1.0, float(CONFIG["REPEAT_MIN_SIMILARITY"]), 0.01, disabled=(not enable_repeat_reconstruction))
+                repeat_min_anchor_conf = st.slider("Repeat: Min Anchor Confidence", 0.0, 1.0, float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]), 0.01, disabled=(not enable_repeat_reconstruction))
+                repeat_min_anchor_consensus = st.number_input("Repeat: Min Anchor Consensus", min_value=1, value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]), step=1, disabled=(not enable_repeat_reconstruction))
+                repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, disabled=(not enable_repeat_reconstruction))
 
                 enable_explainer_pass = st.checkbox(
                     "Explainer-Pass aktivieren",
@@ -579,7 +586,7 @@ def _build_args() -> SimpleNamespace:
                     "Explainer Modell",
                     value=str(default_explainer_model),
                     key=f"{llm_provider}_explainer_model",
-                    disabled=(not enable_explainer_pass) or auto_dataset_tuning,
+                    disabled=(not enable_explainer_pass),
                 )
 
                 write_top_level = st.checkbox(
@@ -608,7 +615,7 @@ def _build_args() -> SimpleNamespace:
                 value=int(kb_budget_defaults.knowledge_top_k),
                 key=f"{llm_provider}_knowledge_top_k",
                 help="Anzahl der Beleg-Chunks pro Frage.",
-                disabled=(not is_postprocess_only) and auto_dataset_tuning,
+                
             )
             knowledge_max_chars = st.number_input(
                 "Knowledge Max Chars",
@@ -617,7 +624,7 @@ def _build_args() -> SimpleNamespace:
                 key=f"{llm_provider}_knowledge_max_chars",
                 step=100,
                 help="Maximale Gesamtlänge der übergebenen Belege.",
-                disabled=(not is_postprocess_only) and auto_dataset_tuning,
+                
             )
             knowledge_min_score = st.slider(
                 "Knowledge Min Score",
@@ -627,7 +634,7 @@ def _build_args() -> SimpleNamespace:
                 0.01,
                 help="Mindestrelevanz eines Chunks.",
                 key=f"{llm_provider}_knowledge_min_score",
-                disabled=(not is_postprocess_only) and auto_dataset_tuning,
+                
             )
             knowledge_chunk_chars = st.number_input(
                 "Knowledge Chunk Chars",
@@ -795,7 +802,7 @@ def main() -> None:
                         setattr(args, key, value)
 
         auto_report: Optional[str] = None
-        if bool(getattr(args, "auto_dataset_tuning", False)) and not bool(getattr(args, "postprocess_only", False)):
+        if bool(getattr(args, "tuning_only", False)) and not bool(getattr(args, "postprocess_only", False)):
             status_text.markdown("**[autotune]** Analysiere Datensatz und ermittle passende Parameter …")
             current_settings = {
                 "trigger_answer_conf": float(args.trigger_answer_conf),
