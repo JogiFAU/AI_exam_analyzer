@@ -3,9 +3,40 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from ai_exam_analyzer.llm_clients import build_llm_client, call_json_schema
+from ai_exam_analyzer.preprocessing import compute_preprocessing_assessment
+
+
+def _load_context_doc() -> str:
+    path = Path(__file__).with_name("auto_tuning_context.md")
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+def _dataset_profile(questions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total = max(1, len(questions))
+    assessments = [compute_preprocessing_assessment(q) for q in questions]
+    avg_quality = sum(float((a.get("qualityScore") or 0.0)) for a in assessments) / float(total)
+    force_manual = sum(1 for a in assessments if bool((a.get("gates") or {}).get("forceManualReview")))
+    blocked_auto = sum(1 for a in assessments if not bool((a.get("gates") or {}).get("allowAutoChange", True)))
+    reason_counts: Dict[str, int] = {}
+    for a in assessments:
+        for reason in (a.get("reasons") or []):
+            key = str(reason)
+            reason_counts[key] = reason_counts.get(key, 0) + 1
+    top_reasons = sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)[:8]
+    return {
+        "question_count": len(questions),
+        "avg_quality_score": round(avg_quality, 4),
+        "force_manual_review_ratio": round(force_manual / float(total), 4),
+        "auto_change_blocked_ratio": round(blocked_auto / float(total), 4),
+        "top_quality_reasons": [{"reason": k, "count": v, "ratio": round(v / float(total), 4)} for k, v in top_reasons],
+    }
 
 
 def _schema() -> Dict[str, Any]:
@@ -62,14 +93,19 @@ def recommend_settings(*, provider: str, api_key: str, model: str, topic_tree: A
 
     user = {
         "topic_tree": topic_tree,
-        "dataset_stats": {"question_count": len(questions)},
+        "dataset_stats": _dataset_profile(questions),
         "sample_questions": sample_payload,
         "current_settings": current,
     }
+    context_doc = _load_context_doc()
     system = (
         "Du optimierst Parameter für einen automatischen Prüfungsfragen-Analyzer. "
         "Wähle robuste Einstellungen für heterogene Datensätze mit Blick auf Qualität vor Aggressivität. "
-        "Liefer kurze, konkrete Begründungen."
+        "Setze die Datensatzanalyse (dataset_stats + sample_questions) explizit in Relation zur Workflow-Dokumentation. "
+        "Nutze konservative Entscheidungen bei Unsicherheit und begründe parameterweise. "
+        "Liefere kurze, konkrete Begründungen.\n\n"
+        "=== Workflow-Kontextdokumentation ===\n"
+        f"{context_doc}"
     )
     out = call_json_schema(
         llm,
@@ -88,4 +124,3 @@ def recommend_settings(*, provider: str, api_key: str, model: str, topic_tree: A
     if reasons:
         report = (report + "\n\n" if report else "") + "\n".join([f"- {x}" for x in reasons[:6]])
     return settings, report
-
