@@ -193,7 +193,6 @@ def _build_args() -> SimpleNamespace:
     input_default_name = os.path.basename(CONFIG["INPUT_PATH"]) or "export.json"
     topics_default_name = os.path.basename(CONFIG["TOPICS_PATH"]) or "topic-tree.json"
     output_default_name = os.path.basename(CONFIG["OUTPUT_PATH"]) or ""
-    cleanup_default_name = os.path.basename(CONFIG["CLEANUP_SPEC_PATH"]) or "whitelist.json"
     images_zip_default_name = os.path.basename(CONFIG["IMAGES_ZIP_PATH"]) or "images.zip"
     knowledge_zip_default_name = os.path.basename(CONFIG["KNOWLEDGE_ZIP_PATH"]) or "knowledge.zip"
     knowledge_index_default_name = os.path.basename(CONFIG["KNOWLEDGE_INDEX_PATH"]) or "knowledge.index.json"
@@ -242,7 +241,6 @@ def _build_args() -> SimpleNamespace:
                 ("Input", input_default_name),
                 ("Topic-Tree", topics_default_name),
                 ("Output", output_status_name),
-                ("Whitelist", cleanup_default_name),
                 ("Bilder ZIP", images_zip_default_name),
                 ("Knowledge ZIP", knowledge_zip_default_name),
             ]
@@ -286,20 +284,7 @@ def _build_args() -> SimpleNamespace:
                 value="",
                 help="Kommagetrennte IDs; leer = alle Fragen.",
             )
-
-            use_cleanup_spec = st.checkbox(
-                "Whitelist/Cleanup nutzen",
-                value=bool(CONFIG["CLEANUP_SPEC_PATH"]),
-                help="Wenn aktiv, wird eine Whitelist/Cleanup-Spec auf das Ausgabeformat angewendet.",
-            )
-            cleanup_spec = _file_picker_row(
-                state_key="cleanup_file",
-                label="Whitelist/Cleanup JSON",
-                default_path=_resolve_path(folder=data_folder, filename=cleanup_default_name),
-                start_dir=data_folder,
-                help_text="Optionale whitelist.json bzw. Cleanup-Spec.",
-                optional=True,
-            ) if use_cleanup_spec else ""
+            cleanup_spec = ""
 
             images_default_path = _resolve_path(folder=data_folder, filename=images_zip_default_name)
             images_default_exists = os.path.exists(images_default_path)
@@ -307,10 +292,9 @@ def _build_args() -> SimpleNamespace:
                 "Fragenbilder ZIP nutzen",
                 value=images_default_exists,
                 help="Wenn aktiv, werden Fragebilder aus einer ZIP geladen und dem Modell mitgegeben.",
-                disabled=not images_default_exists,
             )
             if not images_default_exists:
-                st.caption("ℹ️ `images.zip` nicht im Input-Ordner gefunden – Option deaktiviert.")
+                st.caption("ℹ️ `images.zip` nicht im Input-Ordner gefunden – Nutzung standardmäßig aus, manuelle Auswahl weiterhin möglich.")
             images_zip = _file_picker_row(
                 state_key="images_zip_file",
                 label="Fragenbilder ZIP",
@@ -326,10 +310,9 @@ def _build_args() -> SimpleNamespace:
                 "Knowledge ZIP nutzen",
                 value=knowledge_default_exists,
                 help="Wenn aktiv, wird Wissen aus einer ZIP-Datei geladen.",
-                disabled=not knowledge_default_exists,
             )
             if not knowledge_default_exists:
-                st.caption("ℹ️ `knowledge.zip` nicht im Input-Ordner gefunden – Option deaktiviert.")
+                st.caption("ℹ️ `knowledge.zip` nicht im Input-Ordner gefunden – Nutzung standardmäßig aus, manuelle Auswahl weiterhin möglich.")
             knowledge_zip = _file_picker_row(
                 state_key="knowledge_zip_file",
                 label="Knowledge ZIP",
@@ -410,7 +393,7 @@ def _build_args() -> SimpleNamespace:
             tuning_mode = st.radio(
                 "Parameterauswahl",
                 options=["Vollautomatisch (KI)", "Manuell"],
-                index=0 if st.session_state.get("tuning_mode", "Manuell") == "Vollautomatisch (KI)" else 1,
+                index=0 if st.session_state.get("tuning_mode", "Vollautomatisch (KI)") == "Vollautomatisch (KI)" else 1,
                 horizontal=True,
                 help="Automatisch sperrt die manuellen Pipeline-Einstellungen für diesen Lauf.",
             )
