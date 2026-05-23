@@ -45,3 +45,13 @@ Nicht maximale Änderungsrate, sondern **hohe Verlässlichkeit**:
 ## 5) Erwartete Ausgabe des Tuners
 - Parameterempfehlung im erlaubten Wertebereich.
 - Kurzer Bericht mit Begründung, der Dataset-Qualität + Workflowlogik miteinander verknüpft.
+
+## 6) Knowledge-Base-Analyse für Auto-Tuning
+Die Parameterauswahl MUSS die Qualität der Knowledge Base berücksichtigen:
+- Umfang/Struktur: Anzahl Chunks, Quellenvielfalt, durchschnittliche Chunk-Länge, Bildanzahl.
+- Retrieval-Performance auf Frage-Sample: mittlere Retrieval-Qualität, Anteil Fragen mit nicht-leerer Evidenz.
+
+Ableitungslogik:
+- Wenn Retrieval-Qualität niedrig oder Trefferquote schwach: `knowledge_top_k` und `knowledge_max_chars` eher erhöhen, `knowledge_min_score` moderat senken.
+- Wenn Retrieval stabil gut und Evidenz präzise: eher kompaktere Retrieval-Parameter, um Rauschen/Kosten zu reduzieren.
+- Entscheidungen stets konservativ und mit Blick auf Verlässlichkeit der fachlichen Bewertung treffen.

@@ -782,6 +782,7 @@ def main() -> None:
                 topic_tree=topic_tree,
                 questions=questions,
                 current=current_settings,
+                knowledge_base=knowledge_base,
             )
             for key, value in recommendations.items():
                 if hasattr(args, key):
