@@ -182,6 +182,11 @@ def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir
 
 
 def _build_args() -> SimpleNamespace:
+    pending_widget_updates = st.session_state.pop("_pending_widget_updates", None)
+    if isinstance(pending_widget_updates, dict):
+        for key, value in pending_widget_updates.items():
+            st.session_state[key] = value
+
     if "data_folder" not in st.session_state:
         st.session_state["data_folder"] = _get_default_documents_dir()
     if "output_folder" not in st.session_state:
@@ -798,9 +803,12 @@ def main() -> None:
                 "knowledge_max_chars": f"{provider_prefix}_knowledge_max_chars",
                 "knowledge_min_score": f"{provider_prefix}_knowledge_min_score",
             }
+            pending_updates: Dict[str, Any] = {}
             for k, state_key in state_map.items():
                 if k in recommendations:
-                    st.session_state[state_key] = recommendations[k]
+                    pending_updates[state_key] = recommendations[k]
+            if pending_updates:
+                st.session_state["_pending_widget_updates"] = pending_updates
 
         recent_events: List[str] = []
 
