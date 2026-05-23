@@ -301,11 +301,16 @@ def _build_args() -> SimpleNamespace:
                 optional=True,
             ) if use_cleanup_spec else ""
 
+            images_default_path = _resolve_path(folder=data_folder, filename=images_zip_default_name)
+            images_default_exists = os.path.exists(images_default_path)
             use_images_zip = st.checkbox(
                 "Fragenbilder ZIP nutzen",
-                value=bool(CONFIG["IMAGES_ZIP_PATH"]),
+                value=images_default_exists,
                 help="Wenn aktiv, werden Fragebilder aus einer ZIP geladen und dem Modell mitgegeben.",
+                disabled=not images_default_exists,
             )
+            if not images_default_exists:
+                st.caption("ℹ️ `images.zip` nicht im Input-Ordner gefunden – Option deaktiviert.")
             images_zip = _file_picker_row(
                 state_key="images_zip_file",
                 label="Fragenbilder ZIP",
@@ -315,11 +320,16 @@ def _build_args() -> SimpleNamespace:
                 optional=True,
             ) if use_images_zip else ""
 
+            knowledge_default_path = _resolve_path(folder=data_folder, filename=knowledge_zip_default_name)
+            knowledge_default_exists = os.path.exists(knowledge_default_path)
             use_knowledge_zip = st.checkbox(
                 "Knowledge ZIP nutzen",
-                value=bool(CONFIG["KNOWLEDGE_ZIP_PATH"]),
+                value=knowledge_default_exists,
                 help="Wenn aktiv, wird Wissen aus einer ZIP-Datei geladen.",
+                disabled=not knowledge_default_exists,
             )
+            if not knowledge_default_exists:
+                st.caption("ℹ️ `knowledge.zip` nicht im Input-Ordner gefunden – Option deaktiviert.")
             knowledge_zip = _file_picker_row(
                 state_key="knowledge_zip_file",
                 label="Knowledge ZIP",
@@ -329,9 +339,11 @@ def _build_args() -> SimpleNamespace:
                 optional=True,
             ) if use_knowledge_zip else ""
 
+            knowledge_index_default_path = _resolve_path(folder=data_folder, filename=knowledge_index_default_name)
+            knowledge_index_default_exists = os.path.exists(knowledge_index_default_path)
             use_knowledge_index = st.checkbox(
                 "Knowledge-Index nutzen",
-                value=bool(CONFIG["KNOWLEDGE_INDEX_PATH"]),
+                value=knowledge_index_default_exists,
                 help="Optionaler Index für schnelleren Start; wird geladen/geschrieben.",
             )
             knowledge_index = _file_picker_row(
