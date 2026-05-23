@@ -489,6 +489,16 @@ def _build_args() -> SimpleNamespace:
                 write_top_level = bool(CONFIG["WRITE_TOP_LEVEL"])
                 debug = bool(CONFIG["DEBUG"])
             else:
+                tuning_mode = st.radio(
+                    "Parameterauswahl",
+                    options=["Vollautomatisch (KI)", "Manuell"],
+                    index=0 if st.session_state.get("tuning_mode", "Manuell") == "Vollautomatisch (KI)" else 1,
+                    horizontal=True,
+                    help="Wähle zwischen KI-Autotuning und manueller Parametereinstellung.",
+                )
+                st.session_state["tuning_mode"] = tuning_mode
+                auto_dataset_tuning = tuning_mode == "Vollautomatisch (KI)"
+
                 resume = st.checkbox("Resume aktiv", value=CONFIG["RESUME"], help="Überspringt bereits abgeschlossene Fragen.")
                 limit = st.number_input("Limit (0 = alle Fragen)", min_value=0, value=int(CONFIG["LIMIT"]), help="Begrenzt die Anzahl verarbeiteter Fragen.")
                 sleep_seconds = st.number_input(
@@ -507,32 +517,35 @@ def _build_args() -> SimpleNamespace:
                     value=float(provider_defaults["pass_a_temperature"]),
                     step=0.1,
                     help="Sampling-Temperatur für Pass A.",
+                    disabled=auto_dataset_tuning,
                 )
                 pass_b_reasoning_effort = st.selectbox(
                     "Pass B Reasoning Effort",
                     options=["low", "medium", "high"],
                     index=["low", "medium", "high"].index(str(provider_defaults["pass_b_reasoning_effort"])),
                     help="Rechenaufwand für Pass B.",
+                    disabled=auto_dataset_tuning,
                 )
-                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf")
-                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf")
-                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b")
-                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold")
+                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf", disabled=auto_dataset_tuning)
+                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf", disabled=auto_dataset_tuning)
+                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b", disabled=auto_dataset_tuning)
+                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold", disabled=auto_dataset_tuning)
 
                 enable_repeat_reconstruction = st.checkbox(
                     "Repeat-Reconstruction aktivieren",
                     value=bool(CONFIG["ENABLE_REPEAT_RECONSTRUCTION"]),
                     help="Erkennt wiederholte Fragen über Jahrgänge und ergänzt entsprechende Audit-Signale.",
+                    disabled=auto_dataset_tuning,
                 )
                 auto_apply_repeat_reconstruction = st.checkbox(
                     "Repeat-Reconstruction Auto-Apply (nur Audit-Suggestion)",
                     value=bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"]),
-                    disabled=not enable_repeat_reconstruction,
+                    disabled=(not enable_repeat_reconstruction) or auto_dataset_tuning,
                 )
-                repeat_min_similarity = st.slider("Repeat: Min Similarity", 0.0, 1.0, float(CONFIG["REPEAT_MIN_SIMILARITY"]), 0.01, disabled=not enable_repeat_reconstruction)
-                repeat_min_anchor_conf = st.slider("Repeat: Min Anchor Confidence", 0.0, 1.0, float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]), 0.01, disabled=not enable_repeat_reconstruction)
-                repeat_min_anchor_consensus = st.number_input("Repeat: Min Anchor Consensus", min_value=1, value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]), step=1, disabled=not enable_repeat_reconstruction)
-                repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, disabled=not enable_repeat_reconstruction)
+                repeat_min_similarity = st.slider("Repeat: Min Similarity", 0.0, 1.0, float(CONFIG["REPEAT_MIN_SIMILARITY"]), 0.01, disabled=(not enable_repeat_reconstruction) or auto_dataset_tuning)
+                repeat_min_anchor_conf = st.slider("Repeat: Min Anchor Confidence", 0.0, 1.0, float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]), 0.01, disabled=(not enable_repeat_reconstruction) or auto_dataset_tuning)
+                repeat_min_anchor_consensus = st.number_input("Repeat: Min Anchor Consensus", min_value=1, value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]), step=1, disabled=(not enable_repeat_reconstruction) or auto_dataset_tuning)
+                repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, disabled=(not enable_repeat_reconstruction) or auto_dataset_tuning)
 
                 enable_explainer_pass = st.checkbox(
                     "Explainer-Pass aktivieren",
@@ -543,25 +556,22 @@ def _build_args() -> SimpleNamespace:
                     "Explainer Modell",
                     value=str(default_explainer_model),
                     key=f"{llm_provider}_explainer_model",
-                    disabled=not enable_explainer_pass,
+                    disabled=(not enable_explainer_pass) or auto_dataset_tuning,
                 )
 
                 write_top_level = st.checkbox(
                     "Top-Level ai* Felder schreiben",
                     value=CONFIG["WRITE_TOP_LEVEL"],
                     help="Schreibt zusätzliche ai*-Felder direkt in jede Frage.",
+                    disabled=auto_dataset_tuning,
                 )
                 debug = st.checkbox(
                     "Debug-Rohdaten speichern",
                     value=CONFIG["DEBUG"],
                     help="Speichert detaillierte Rohantworten unter aiAudit._debug.",
+                    disabled=auto_dataset_tuning,
                 )
 
-                auto_dataset_tuning = st.checkbox(
-                    "Vollautomatische Parameterwahl (KI)",
-                    value=False,
-                    help="Vorab-Analyse von Fragen+Themen zur automatischen Wahl geeigneter Parameter inkl. Kurzbericht.",
-                )
 
         with st.expander("🧠 Knowledge Base", expanded=False):
             knowledge_subject_hint = st.text_input(
@@ -575,6 +585,7 @@ def _build_args() -> SimpleNamespace:
                 value=int(kb_budget_defaults.knowledge_top_k),
                 key=f"{llm_provider}_knowledge_top_k",
                 help="Anzahl der Beleg-Chunks pro Frage.",
+                disabled=(not is_postprocess_only) and auto_dataset_tuning,
             )
             knowledge_max_chars = st.number_input(
                 "Knowledge Max Chars",
@@ -583,6 +594,7 @@ def _build_args() -> SimpleNamespace:
                 key=f"{llm_provider}_knowledge_max_chars",
                 step=100,
                 help="Maximale Gesamtlänge der übergebenen Belege.",
+                disabled=(not is_postprocess_only) and auto_dataset_tuning,
             )
             knowledge_min_score = st.slider(
                 "Knowledge Min Score",
@@ -592,6 +604,7 @@ def _build_args() -> SimpleNamespace:
                 0.01,
                 help="Mindestrelevanz eines Chunks.",
                 key=f"{llm_provider}_knowledge_min_score",
+                disabled=(not is_postprocess_only) and auto_dataset_tuning,
             )
             knowledge_chunk_chars = st.number_input(
                 "Knowledge Chunk Chars",
@@ -775,6 +788,20 @@ def main() -> None:
             for key, value in recommendations.items():
                 if hasattr(args, key):
                     setattr(args, key, value)
+
+            provider_prefix = str(args.llm_provider)
+            state_map = {
+                "trigger_answer_conf": f"{provider_prefix}_trigger_answer_conf",
+                "trigger_topic_conf": f"{provider_prefix}_trigger_topic_conf",
+                "apply_change_min_conf_b": f"{provider_prefix}_apply_change_min_conf_b",
+                "low_conf_maintenance_threshold": f"{provider_prefix}_low_conf_maintenance_threshold",
+                "knowledge_top_k": f"{provider_prefix}_knowledge_top_k",
+                "knowledge_max_chars": f"{provider_prefix}_knowledge_max_chars",
+                "knowledge_min_score": f"{provider_prefix}_knowledge_min_score",
+            }
+            for k, state_key in state_map.items():
+                if k in recommendations:
+                    st.session_state[state_key] = recommendations[k]
 
         recent_events: List[str] = []
 
