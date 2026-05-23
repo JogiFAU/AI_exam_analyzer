@@ -393,7 +393,21 @@ def _build_args() -> SimpleNamespace:
             default_reconstruction_model = CONFIG["RECONSTRUCTION_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["RECONSTRUCTION_MODEL"]
             default_explainer_model = CONFIG["EXPLAINER_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["EXPLAINER_MODEL"]
 
+        auto_dataset_tuning = False
+        if not is_postprocess_only:
+            tuning_mode = st.radio(
+                "Parameterauswahl",
+                options=["Vollautomatisch (KI)", "Manuell"],
+                index=0 if st.session_state.get("tuning_mode", "Manuell") == "Vollautomatisch (KI)" else 1,
+                horizontal=True,
+                help="Automatisch sperrt die manuellen Pipeline-Einstellungen für diesen Lauf.",
+            )
+            st.session_state["tuning_mode"] = tuning_mode
+            auto_dataset_tuning = tuning_mode == "Vollautomatisch (KI)"
+
         with st.expander("⚙️ Pipeline", expanded=False):
+            if auto_dataset_tuning and not is_postprocess_only:
+                st.info("Automatik aktiv: Manuelle Pipeline-Einstellungen sind für diesen Lauf gesperrt.")
             checkpoint_every = st.number_input(
                 "Checkpoint alle N Fragen",
                 min_value=1,
@@ -452,7 +466,6 @@ def _build_args() -> SimpleNamespace:
 
             force_rerun_review = False
             force_rerun_reconstruction = False
-            auto_dataset_tuning = False
 
             if is_postprocess_only:
                 st.caption("Postprocessing-only: nur fehlende/fehlerhafte Ergebnisse werden neu berechnet (optional erzwingen).")
@@ -489,16 +502,6 @@ def _build_args() -> SimpleNamespace:
                 write_top_level = bool(CONFIG["WRITE_TOP_LEVEL"])
                 debug = bool(CONFIG["DEBUG"])
             else:
-                tuning_mode = st.radio(
-                    "Parameterauswahl",
-                    options=["Vollautomatisch (KI)", "Manuell"],
-                    index=0 if st.session_state.get("tuning_mode", "Manuell") == "Vollautomatisch (KI)" else 1,
-                    horizontal=True,
-                    help="Wähle zwischen KI-Autotuning und manueller Parametereinstellung.",
-                )
-                st.session_state["tuning_mode"] = tuning_mode
-                auto_dataset_tuning = tuning_mode == "Vollautomatisch (KI)"
-
                 resume = st.checkbox("Resume aktiv", value=CONFIG["RESUME"], help="Überspringt bereits abgeschlossene Fragen.")
                 limit = st.number_input("Limit (0 = alle Fragen)", min_value=0, value=int(CONFIG["LIMIT"]), help="Begrenzt die Anzahl verarbeiteter Fragen.")
                 sleep_seconds = st.number_input(
