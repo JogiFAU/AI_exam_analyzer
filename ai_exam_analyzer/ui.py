@@ -206,11 +206,12 @@ def _build_args() -> SimpleNamespace:
         st.header("Einstellungen")
         run_mode = st.radio(
             "Modus",
-            options=["Vollständige Analyse", "Postprocessing only"],
+            options=["Vollständige Analyse", "Parameter-Einstellung", "Postprocessing only"],
             index=0,
             help="Im Postprocessing-only Modus werden nur Review/Reconstruction auf bestehendem aiAudit neu berechnet.",
         )
         is_postprocess_only = (run_mode == "Postprocessing only")
+        is_tuning_only = (run_mode == "Parameter-Einstellung")
 
         with st.expander("📁 Datenquellen", expanded=True):
             st.caption("Datenordner (Standard für Dateiauswahl)")
@@ -289,6 +290,25 @@ def _build_args() -> SimpleNamespace:
                 value="",
                 help="Kommagetrennte IDs; leer = alle Fragen.",
             )
+            analysis_config_default_name = "analysis_config.json"
+            analysis_config_path = _file_picker_row(
+                state_key="analysis_config_file",
+                label="Analyse-Konfig JSON",
+                default_path=_resolve_path(folder=data_folder, filename=analysis_config_default_name),
+                start_dir=data_folder,
+                help_text="Konfig mit Parametern aus Parameter-Einstellung (wird automatisch erkannt).",
+                optional=True,
+            )
+            save_tuning_config_path = _file_picker_row(
+                state_key="save_tuning_config_file",
+                label="Speicherziel Parameter-Konfig",
+                default_path=_resolve_path(folder=data_folder, filename=analysis_config_default_name),
+                start_dir=data_folder,
+                help_text="Zieldatei für ermittelte Parameter aus Parameter-Einstellung.",
+                optional=False,
+                require_existing=False,
+            ) if is_tuning_only else analysis_config_path
+
             cleanup_spec = ""
 
             images_default_path = _resolve_path(folder=data_folder, filename=images_zip_default_name)
@@ -619,6 +639,7 @@ def _build_args() -> SimpleNamespace:
 
     return SimpleNamespace(
         postprocess_only=bool(is_postprocess_only),
+        tuning_only=bool(is_tuning_only),
         force_rerun_review=bool(force_rerun_review),
         force_rerun_reconstruction=bool(force_rerun_reconstruction),
         only_question_ids=[x.strip() for x in (only_question_ids_raw or "").split(",") if x.strip()],
@@ -669,6 +690,8 @@ def _build_args() -> SimpleNamespace:
         enable_explainer_pass=bool(enable_explainer_pass),
         explainer_model=explainer_model.strip(),
         auto_dataset_tuning=bool(auto_dataset_tuning),
+        analysis_config_path=(analysis_config_path or "").strip(),
+        save_tuning_config_path=(save_tuning_config_path or "").strip(),
     )
 
 
@@ -718,7 +741,7 @@ def main() -> None:
     args = _build_args()
     apply_model_optimized_defaults(args)
 
-    start_label = "Postprocessing starten" if bool(getattr(args, "postprocess_only", False)) else "Analyse starten"
+    start_label = "Parameter-Einstellung starten" if bool(getattr(args, "tuning_only", False)) else ("Postprocessing starten" if bool(getattr(args, "postprocess_only", False)) else "Analyse starten")
     start_button = st.button(start_label, type="primary", use_container_width=True)
 
     progress_bar = st.progress(0)
@@ -764,6 +787,12 @@ def main() -> None:
         image_store = _prepare_image_store(args)
         knowledge_base = _prepare_knowledge_base(args, topic_tree)
 
+        if (not bool(getattr(args, "tuning_only", False))) and args.analysis_config_path and os.path.exists(args.analysis_config_path):
+            loaded_cfg = load_json(args.analysis_config_path)
+            if isinstance(loaded_cfg, dict):
+                for key, value in loaded_cfg.items():
+                    if hasattr(args, key):
+                        setattr(args, key, value)
 
         auto_report: Optional[str] = None
         if bool(getattr(args, "auto_dataset_tuning", False)) and not bool(getattr(args, "postprocess_only", False)):
@@ -809,6 +838,33 @@ def main() -> None:
                     pending_updates[state_key] = recommendations[k]
             if pending_updates:
                 st.session_state["_pending_widget_updates"] = pending_updates
+
+        if bool(getattr(args, "tuning_only", False)):
+            if not auto_report:
+                auto_report = "Keine Auto-Tuning-Ergebnisse verfügbar."
+            tuning_payload = {
+                "llm_provider": args.llm_provider,
+                "created_from_input": args.input,
+                "settings": {
+                    "trigger_answer_conf": float(args.trigger_answer_conf),
+                    "trigger_topic_conf": float(args.trigger_topic_conf),
+                    "apply_change_min_conf_b": float(args.apply_change_min_conf_b),
+                    "low_conf_maintenance_threshold": float(args.low_conf_maintenance_threshold),
+                    "knowledge_top_k": int(args.knowledge_top_k),
+                    "knowledge_max_chars": int(args.knowledge_max_chars),
+                    "knowledge_min_score": float(args.knowledge_min_score),
+                    "enable_review_pass": bool(args.enable_review_pass),
+                    "enable_reconstruction_pass": bool(args.enable_reconstruction_pass),
+                    "enable_repeat_reconstruction": bool(args.enable_repeat_reconstruction),
+                },
+                "report": auto_report,
+            }
+            target_cfg = args.save_tuning_config_path or _resolve_path(folder=os.path.dirname(args.input), filename="analysis_config.json")
+            from ai_exam_analyzer.io_utils import save_json
+            save_json(target_cfg, tuning_payload["settings"])
+            st.success(f"Parameter-Einstellung abgeschlossen. Konfig gespeichert: {target_cfg}")
+            st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
+            return
 
         recent_events: List[str] = []
 
