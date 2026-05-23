@@ -16,6 +16,7 @@ from ai_exam_analyzer.knowledge_base import (
     save_index_json,
 )
 from ai_exam_analyzer.processor import process_questions
+from ai_exam_analyzer.auto_tuning import recommend_settings
 from ai_exam_analyzer.schemas import (
     schema_explainer_pass,
     schema_pass_a,
@@ -451,6 +452,7 @@ def _build_args() -> SimpleNamespace:
 
             force_rerun_review = False
             force_rerun_reconstruction = False
+            auto_dataset_tuning = False
 
             if is_postprocess_only:
                 st.caption("Postprocessing-only: nur fehlende/fehlerhafte Ergebnisse werden neu berechnet (optional erzwingen).")
@@ -555,6 +557,12 @@ def _build_args() -> SimpleNamespace:
                     help="Speichert detaillierte Rohantworten unter aiAudit._debug.",
                 )
 
+                auto_dataset_tuning = st.checkbox(
+                    "Vollautomatische Parameterwahl (KI)",
+                    value=False,
+                    help="Vorab-Analyse von Fragen+Themen zur automatischen Wahl geeigneter Parameter inkl. Kurzbericht.",
+                )
+
         with st.expander("🧠 Knowledge Base", expanded=False):
             knowledge_subject_hint = st.text_input(
                 "Subject Hint",
@@ -644,6 +652,7 @@ def _build_args() -> SimpleNamespace:
         reconstruction_model=reconstruction_model.strip(),
         enable_explainer_pass=bool(enable_explainer_pass),
         explainer_model=explainer_model.strip(),
+        auto_dataset_tuning=bool(auto_dataset_tuning),
     )
 
 
@@ -739,6 +748,34 @@ def main() -> None:
         image_store = _prepare_image_store(args)
         knowledge_base = _prepare_knowledge_base(args, topic_tree)
 
+
+        auto_report: Optional[str] = None
+        if bool(getattr(args, "auto_dataset_tuning", False)) and not bool(getattr(args, "postprocess_only", False)):
+            status_text.markdown("**[autotune]** Analysiere Datensatz und ermittle passende Parameter …")
+            current_settings = {
+                "trigger_answer_conf": float(args.trigger_answer_conf),
+                "trigger_topic_conf": float(args.trigger_topic_conf),
+                "apply_change_min_conf_b": float(args.apply_change_min_conf_b),
+                "low_conf_maintenance_threshold": float(args.low_conf_maintenance_threshold),
+                "knowledge_top_k": int(args.knowledge_top_k),
+                "knowledge_max_chars": int(args.knowledge_max_chars),
+                "knowledge_min_score": float(args.knowledge_min_score),
+                "enable_review_pass": bool(args.enable_review_pass),
+                "enable_reconstruction_pass": bool(args.enable_reconstruction_pass),
+                "enable_repeat_reconstruction": bool(args.enable_repeat_reconstruction),
+            }
+            recommendations, auto_report = recommend_settings(
+                provider=args.llm_provider,
+                api_key=args.api_key,
+                model=args.passB_model or args.passA_model,
+                topic_tree=topic_tree,
+                questions=questions,
+                current=current_settings,
+            )
+            for key, value in recommendations.items():
+                if hasattr(args, key):
+                    setattr(args, key, value)
+
         recent_events: List[str] = []
 
         def on_progress(event: Dict[str, Any]) -> None:
@@ -799,6 +836,8 @@ def main() -> None:
 
         progress_bar.progress(1.0)
         st.success(f"Analyse beendet. Ergebnis gespeichert unter: {args.output}")
+        if auto_report:
+            st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
 
     except Exception as exc:
         st.exception(exc)
