@@ -22,6 +22,7 @@ from ai_exam_analyzer.schemas import (
     schema_pass_b,
     schema_reconstruction_pass,
     schema_review_pass,
+    schema_abstraction_cluster_refinement,
 )
 from ai_exam_analyzer.topic_catalog import build_topic_catalog, format_topic_catalog_for_prompt
 
@@ -722,6 +723,7 @@ def main() -> None:
         schema_review = schema_review_pass(topic_keys)
         schema_reconstruction = schema_reconstruction_pass()
         schema_explainer = schema_explainer_pass()
+        schema_cluster_refinement = schema_abstraction_cluster_refinement()
 
         data = load_json(args.input)
         if isinstance(data, dict) and "questions" in data:
@@ -788,6 +790,7 @@ def main() -> None:
             schema_review=schema_review,
             schema_reconstruction=schema_reconstruction,
             schema_explainer=schema_explainer,
+            schema_cluster_refinement=schema_cluster_refinement,
             cleanup_spec=cleanup_spec,
             knowledge_base=knowledge_base,
             image_store=image_store,
