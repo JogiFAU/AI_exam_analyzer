@@ -16,12 +16,14 @@ from ai_exam_analyzer.knowledge_base import (
     save_index_json,
 )
 from ai_exam_analyzer.processor import process_questions
+from ai_exam_analyzer.auto_tuning import recommend_settings
 from ai_exam_analyzer.schemas import (
     schema_explainer_pass,
     schema_pass_a,
     schema_pass_b,
     schema_reconstruction_pass,
     schema_review_pass,
+    schema_abstraction_cluster_refinement,
 )
 from ai_exam_analyzer.topic_catalog import build_topic_catalog, format_topic_catalog_for_prompt
 
@@ -180,6 +182,11 @@ def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir
 
 
 def _build_args() -> SimpleNamespace:
+    pending_widget_updates = st.session_state.pop("_pending_widget_updates", None)
+    if isinstance(pending_widget_updates, dict):
+        for key, value in pending_widget_updates.items():
+            st.session_state[key] = value
+
     if "data_folder" not in st.session_state:
         st.session_state["data_folder"] = _get_default_documents_dir()
     if "output_folder" not in st.session_state:
@@ -191,7 +198,6 @@ def _build_args() -> SimpleNamespace:
     input_default_name = os.path.basename(CONFIG["INPUT_PATH"]) or "export.json"
     topics_default_name = os.path.basename(CONFIG["TOPICS_PATH"]) or "topic-tree.json"
     output_default_name = os.path.basename(CONFIG["OUTPUT_PATH"]) or ""
-    cleanup_default_name = os.path.basename(CONFIG["CLEANUP_SPEC_PATH"]) or "whitelist.json"
     images_zip_default_name = os.path.basename(CONFIG["IMAGES_ZIP_PATH"]) or "images.zip"
     knowledge_zip_default_name = os.path.basename(CONFIG["KNOWLEDGE_ZIP_PATH"]) or "knowledge.zip"
     knowledge_index_default_name = os.path.basename(CONFIG["KNOWLEDGE_INDEX_PATH"]) or "knowledge.index.json"
@@ -200,11 +206,12 @@ def _build_args() -> SimpleNamespace:
         st.header("Einstellungen")
         run_mode = st.radio(
             "Modus",
-            options=["Vollständige Analyse", "Postprocessing only"],
+            options=["Vollständige Analyse", "Parameter-Einstellung", "Postprocessing only"],
             index=0,
             help="Im Postprocessing-only Modus werden nur Review/Reconstruction auf bestehendem aiAudit neu berechnet.",
         )
         is_postprocess_only = (run_mode == "Postprocessing only")
+        is_tuning_only = (run_mode == "Parameter-Einstellung")
 
         with st.expander("📁 Datenquellen", expanded=True):
             st.caption("Datenordner (Standard für Dateiauswahl)")
@@ -240,7 +247,6 @@ def _build_args() -> SimpleNamespace:
                 ("Input", input_default_name),
                 ("Topic-Tree", topics_default_name),
                 ("Output", output_status_name),
-                ("Whitelist", cleanup_default_name),
                 ("Bilder ZIP", images_zip_default_name),
                 ("Knowledge ZIP", knowledge_zip_default_name),
             ]
@@ -284,26 +290,56 @@ def _build_args() -> SimpleNamespace:
                 value="",
                 help="Kommagetrennte IDs; leer = alle Fragen.",
             )
-
-            use_cleanup_spec = st.checkbox(
-                "Whitelist/Cleanup nutzen",
-                value=bool(CONFIG["CLEANUP_SPEC_PATH"]),
-                help="Wenn aktiv, wird eine Whitelist/Cleanup-Spec auf das Ausgabeformat angewendet.",
-            )
-            cleanup_spec = _file_picker_row(
-                state_key="cleanup_file",
-                label="Whitelist/Cleanup JSON",
-                default_path=_resolve_path(folder=data_folder, filename=cleanup_default_name),
+            analysis_config_default_name = "analysis_config.json"
+            analysis_config_path = _file_picker_row(
+                state_key="analysis_config_file",
+                label="Analyse-Konfig JSON",
+                default_path=_resolve_path(folder=data_folder, filename=analysis_config_default_name),
                 start_dir=data_folder,
-                help_text="Optionale whitelist.json bzw. Cleanup-Spec.",
+                help_text="Konfig mit Parametern aus Parameter-Einstellung (wird automatisch erkannt).",
                 optional=True,
-            ) if use_cleanup_spec else ""
+            )
+            save_tuning_config_path = _file_picker_row(
+                state_key="save_tuning_config_file",
+                label="Speicherziel Parameter-Konfig",
+                default_path=_resolve_path(folder=data_folder, filename=analysis_config_default_name),
+                start_dir=data_folder,
+                help_text="Zieldatei für ermittelte Parameter aus Parameter-Einstellung.",
+                optional=False,
+                require_existing=False,
+            ) if is_tuning_only else analysis_config_path
 
+            if (not is_tuning_only) and (not is_postprocess_only) and analysis_config_path and os.path.exists(analysis_config_path):
+                try:
+                    loaded_cfg = load_json(analysis_config_path)
+                    if isinstance(loaded_cfg, dict):
+                        provider_prefix = str(st.session_state.get("llm_provider", "openai"))
+                        cfg_to_widget = {
+                            "trigger_answer_conf": f"{provider_prefix}_trigger_answer_conf",
+                            "trigger_topic_conf": f"{provider_prefix}_trigger_topic_conf",
+                            "apply_change_min_conf_b": f"{provider_prefix}_apply_change_min_conf_b",
+                            "low_conf_maintenance_threshold": f"{provider_prefix}_low_conf_maintenance_threshold",
+                            "knowledge_top_k": f"{provider_prefix}_knowledge_top_k",
+                            "knowledge_max_chars": f"{provider_prefix}_knowledge_max_chars",
+                            "knowledge_min_score": f"{provider_prefix}_knowledge_min_score",
+                        }
+                        for ck, wk in cfg_to_widget.items():
+                            if ck in loaded_cfg:
+                                st.session_state[wk] = loaded_cfg[ck]
+                except Exception:
+                    pass
+
+            cleanup_spec = ""
+
+            images_default_path = _resolve_path(folder=data_folder, filename=images_zip_default_name)
+            images_default_exists = os.path.exists(images_default_path)
             use_images_zip = st.checkbox(
                 "Fragenbilder ZIP nutzen",
-                value=bool(CONFIG["IMAGES_ZIP_PATH"]),
+                value=images_default_exists,
                 help="Wenn aktiv, werden Fragebilder aus einer ZIP geladen und dem Modell mitgegeben.",
             )
+            if not images_default_exists:
+                st.caption("ℹ️ `images.zip` nicht im Input-Ordner gefunden – Nutzung standardmäßig aus, manuelle Auswahl weiterhin möglich.")
             images_zip = _file_picker_row(
                 state_key="images_zip_file",
                 label="Fragenbilder ZIP",
@@ -313,11 +349,15 @@ def _build_args() -> SimpleNamespace:
                 optional=True,
             ) if use_images_zip else ""
 
+            knowledge_default_path = _resolve_path(folder=data_folder, filename=knowledge_zip_default_name)
+            knowledge_default_exists = os.path.exists(knowledge_default_path)
             use_knowledge_zip = st.checkbox(
                 "Knowledge ZIP nutzen",
-                value=bool(CONFIG["KNOWLEDGE_ZIP_PATH"]),
+                value=knowledge_default_exists,
                 help="Wenn aktiv, wird Wissen aus einer ZIP-Datei geladen.",
             )
+            if not knowledge_default_exists:
+                st.caption("ℹ️ `knowledge.zip` nicht im Input-Ordner gefunden – Nutzung standardmäßig aus, manuelle Auswahl weiterhin möglich.")
             knowledge_zip = _file_picker_row(
                 state_key="knowledge_zip_file",
                 label="Knowledge ZIP",
@@ -327,9 +367,11 @@ def _build_args() -> SimpleNamespace:
                 optional=True,
             ) if use_knowledge_zip else ""
 
+            knowledge_index_default_path = _resolve_path(folder=data_folder, filename=knowledge_index_default_name)
+            knowledge_index_default_exists = os.path.exists(knowledge_index_default_path)
             use_knowledge_index = st.checkbox(
                 "Knowledge-Index nutzen",
-                value=bool(CONFIG["KNOWLEDGE_INDEX_PATH"]),
+                value=knowledge_index_default_exists,
                 help="Optionaler Index für schnelleren Start; wird geladen/geschrieben.",
             )
             knowledge_index = _file_picker_row(
@@ -390,6 +432,7 @@ def _build_args() -> SimpleNamespace:
             default_review_model = CONFIG["REVIEW_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["REVIEW_MODEL"]
             default_reconstruction_model = CONFIG["RECONSTRUCTION_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["RECONSTRUCTION_MODEL"]
             default_explainer_model = CONFIG["EXPLAINER_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["EXPLAINER_MODEL"]
+        auto_dataset_tuning = bool(is_tuning_only)
 
         with st.expander("⚙️ Pipeline", expanded=False):
             checkpoint_every = st.number_input(
@@ -504,12 +547,14 @@ def _build_args() -> SimpleNamespace:
                     value=float(provider_defaults["pass_a_temperature"]),
                     step=0.1,
                     help="Sampling-Temperatur für Pass A.",
+                    disabled=auto_dataset_tuning,
                 )
                 pass_b_reasoning_effort = st.selectbox(
                     "Pass B Reasoning Effort",
                     options=["low", "medium", "high"],
                     index=["low", "medium", "high"].index(str(provider_defaults["pass_b_reasoning_effort"])),
                     help="Rechenaufwand für Pass B.",
+                    disabled=auto_dataset_tuning,
                 )
                 trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf")
                 trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf")
@@ -520,16 +565,17 @@ def _build_args() -> SimpleNamespace:
                     "Repeat-Reconstruction aktivieren",
                     value=bool(CONFIG["ENABLE_REPEAT_RECONSTRUCTION"]),
                     help="Erkennt wiederholte Fragen über Jahrgänge und ergänzt entsprechende Audit-Signale.",
+                    disabled=auto_dataset_tuning,
                 )
                 auto_apply_repeat_reconstruction = st.checkbox(
                     "Repeat-Reconstruction Auto-Apply (nur Audit-Suggestion)",
                     value=bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"]),
-                    disabled=not enable_repeat_reconstruction,
+                    disabled=(not enable_repeat_reconstruction),
                 )
-                repeat_min_similarity = st.slider("Repeat: Min Similarity", 0.0, 1.0, float(CONFIG["REPEAT_MIN_SIMILARITY"]), 0.01, disabled=not enable_repeat_reconstruction)
-                repeat_min_anchor_conf = st.slider("Repeat: Min Anchor Confidence", 0.0, 1.0, float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]), 0.01, disabled=not enable_repeat_reconstruction)
-                repeat_min_anchor_consensus = st.number_input("Repeat: Min Anchor Consensus", min_value=1, value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]), step=1, disabled=not enable_repeat_reconstruction)
-                repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, disabled=not enable_repeat_reconstruction)
+                repeat_min_similarity = st.slider("Repeat: Min Similarity", 0.0, 1.0, float(CONFIG["REPEAT_MIN_SIMILARITY"]), 0.01, disabled=(not enable_repeat_reconstruction))
+                repeat_min_anchor_conf = st.slider("Repeat: Min Anchor Confidence", 0.0, 1.0, float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]), 0.01, disabled=(not enable_repeat_reconstruction))
+                repeat_min_anchor_consensus = st.number_input("Repeat: Min Anchor Consensus", min_value=1, value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]), step=1, disabled=(not enable_repeat_reconstruction))
+                repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, disabled=(not enable_repeat_reconstruction))
 
                 enable_explainer_pass = st.checkbox(
                     "Explainer-Pass aktivieren",
@@ -540,19 +586,22 @@ def _build_args() -> SimpleNamespace:
                     "Explainer Modell",
                     value=str(default_explainer_model),
                     key=f"{llm_provider}_explainer_model",
-                    disabled=not enable_explainer_pass,
+                    disabled=(not enable_explainer_pass),
                 )
 
                 write_top_level = st.checkbox(
                     "Top-Level ai* Felder schreiben",
                     value=CONFIG["WRITE_TOP_LEVEL"],
                     help="Schreibt zusätzliche ai*-Felder direkt in jede Frage.",
+                    disabled=auto_dataset_tuning,
                 )
                 debug = st.checkbox(
                     "Debug-Rohdaten speichern",
                     value=CONFIG["DEBUG"],
                     help="Speichert detaillierte Rohantworten unter aiAudit._debug.",
+                    disabled=auto_dataset_tuning,
                 )
+
 
         with st.expander("🧠 Knowledge Base", expanded=False):
             knowledge_subject_hint = st.text_input(
@@ -566,6 +615,7 @@ def _build_args() -> SimpleNamespace:
                 value=int(kb_budget_defaults.knowledge_top_k),
                 key=f"{llm_provider}_knowledge_top_k",
                 help="Anzahl der Beleg-Chunks pro Frage.",
+                
             )
             knowledge_max_chars = st.number_input(
                 "Knowledge Max Chars",
@@ -574,6 +624,7 @@ def _build_args() -> SimpleNamespace:
                 key=f"{llm_provider}_knowledge_max_chars",
                 step=100,
                 help="Maximale Gesamtlänge der übergebenen Belege.",
+                
             )
             knowledge_min_score = st.slider(
                 "Knowledge Min Score",
@@ -583,6 +634,7 @@ def _build_args() -> SimpleNamespace:
                 0.01,
                 help="Mindestrelevanz eines Chunks.",
                 key=f"{llm_provider}_knowledge_min_score",
+                
             )
             knowledge_chunk_chars = st.number_input(
                 "Knowledge Chunk Chars",
@@ -594,6 +646,7 @@ def _build_args() -> SimpleNamespace:
 
     return SimpleNamespace(
         postprocess_only=bool(is_postprocess_only),
+        tuning_only=bool(is_tuning_only),
         force_rerun_review=bool(force_rerun_review),
         force_rerun_reconstruction=bool(force_rerun_reconstruction),
         only_question_ids=[x.strip() for x in (only_question_ids_raw or "").split(",") if x.strip()],
@@ -643,6 +696,9 @@ def _build_args() -> SimpleNamespace:
         reconstruction_model=reconstruction_model.strip(),
         enable_explainer_pass=bool(enable_explainer_pass),
         explainer_model=explainer_model.strip(),
+        auto_dataset_tuning=bool(auto_dataset_tuning),
+        analysis_config_path=(analysis_config_path or "").strip(),
+        save_tuning_config_path=(save_tuning_config_path or "").strip(),
     )
 
 
@@ -692,7 +748,7 @@ def main() -> None:
     args = _build_args()
     apply_model_optimized_defaults(args)
 
-    start_label = "Postprocessing starten" if bool(getattr(args, "postprocess_only", False)) else "Analyse starten"
+    start_label = "Parameter-Einstellung starten" if bool(getattr(args, "tuning_only", False)) else ("Postprocessing starten" if bool(getattr(args, "postprocess_only", False)) else "Analyse starten")
     start_button = st.button(start_label, type="primary", use_container_width=True)
 
     progress_bar = st.progress(0)
@@ -722,6 +778,7 @@ def main() -> None:
         schema_review = schema_review_pass(topic_keys)
         schema_reconstruction = schema_reconstruction_pass()
         schema_explainer = schema_explainer_pass()
+        schema_cluster_refinement = schema_abstraction_cluster_refinement()
 
         data = load_json(args.input)
         if isinstance(data, dict) and "questions" in data:
@@ -736,6 +793,85 @@ def main() -> None:
         cleanup_spec = load_json(args.cleanup_spec) if args.cleanup_spec else None
         image_store = _prepare_image_store(args)
         knowledge_base = _prepare_knowledge_base(args, topic_tree)
+
+        if (not bool(getattr(args, "tuning_only", False))) and args.analysis_config_path and os.path.exists(args.analysis_config_path):
+            loaded_cfg = load_json(args.analysis_config_path)
+            if isinstance(loaded_cfg, dict):
+                for key, value in loaded_cfg.items():
+                    if hasattr(args, key):
+                        setattr(args, key, value)
+
+        auto_report: Optional[str] = None
+        if bool(getattr(args, "tuning_only", False)) and not bool(getattr(args, "postprocess_only", False)):
+            status_text.markdown("**[autotune]** Analysiere Datensatz und ermittle passende Parameter …")
+            current_settings = {
+                "trigger_answer_conf": float(args.trigger_answer_conf),
+                "trigger_topic_conf": float(args.trigger_topic_conf),
+                "apply_change_min_conf_b": float(args.apply_change_min_conf_b),
+                "low_conf_maintenance_threshold": float(args.low_conf_maintenance_threshold),
+                "knowledge_top_k": int(args.knowledge_top_k),
+                "knowledge_max_chars": int(args.knowledge_max_chars),
+                "knowledge_min_score": float(args.knowledge_min_score),
+                "enable_review_pass": bool(args.enable_review_pass),
+                "enable_reconstruction_pass": bool(args.enable_reconstruction_pass),
+                "enable_repeat_reconstruction": bool(args.enable_repeat_reconstruction),
+            }
+            recommendations, auto_report = recommend_settings(
+                provider=args.llm_provider,
+                api_key=args.api_key,
+                model=args.passB_model or args.passA_model,
+                topic_tree=topic_tree,
+                questions=questions,
+                current=current_settings,
+                knowledge_base=knowledge_base,
+            )
+            for key, value in recommendations.items():
+                if hasattr(args, key):
+                    setattr(args, key, value)
+
+            provider_prefix = str(args.llm_provider)
+            state_map = {
+                "trigger_answer_conf": f"{provider_prefix}_trigger_answer_conf",
+                "trigger_topic_conf": f"{provider_prefix}_trigger_topic_conf",
+                "apply_change_min_conf_b": f"{provider_prefix}_apply_change_min_conf_b",
+                "low_conf_maintenance_threshold": f"{provider_prefix}_low_conf_maintenance_threshold",
+                "knowledge_top_k": f"{provider_prefix}_knowledge_top_k",
+                "knowledge_max_chars": f"{provider_prefix}_knowledge_max_chars",
+                "knowledge_min_score": f"{provider_prefix}_knowledge_min_score",
+            }
+            pending_updates: Dict[str, Any] = {}
+            for k, state_key in state_map.items():
+                if k in recommendations:
+                    pending_updates[state_key] = recommendations[k]
+            if pending_updates:
+                st.session_state["_pending_widget_updates"] = pending_updates
+
+        if bool(getattr(args, "tuning_only", False)):
+            if not auto_report:
+                auto_report = "Keine Auto-Tuning-Ergebnisse verfügbar."
+            tuning_payload = {
+                "llm_provider": args.llm_provider,
+                "created_from_input": args.input,
+                "settings": {
+                    "trigger_answer_conf": float(args.trigger_answer_conf),
+                    "trigger_topic_conf": float(args.trigger_topic_conf),
+                    "apply_change_min_conf_b": float(args.apply_change_min_conf_b),
+                    "low_conf_maintenance_threshold": float(args.low_conf_maintenance_threshold),
+                    "knowledge_top_k": int(args.knowledge_top_k),
+                    "knowledge_max_chars": int(args.knowledge_max_chars),
+                    "knowledge_min_score": float(args.knowledge_min_score),
+                    "enable_review_pass": bool(args.enable_review_pass),
+                    "enable_reconstruction_pass": bool(args.enable_reconstruction_pass),
+                    "enable_repeat_reconstruction": bool(args.enable_repeat_reconstruction),
+                },
+                "report": auto_report,
+            }
+            target_cfg = args.save_tuning_config_path or _resolve_path(folder=os.path.dirname(args.input), filename="analysis_config.json")
+            from ai_exam_analyzer.io_utils import save_json
+            save_json(target_cfg, tuning_payload["settings"])
+            st.success(f"Parameter-Einstellung abgeschlossen. Konfig gespeichert: {target_cfg}")
+            st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
+            return
 
         recent_events: List[str] = []
 
@@ -788,6 +924,7 @@ def main() -> None:
             schema_review=schema_review,
             schema_reconstruction=schema_reconstruction,
             schema_explainer=schema_explainer,
+            schema_cluster_refinement=schema_cluster_refinement,
             cleanup_spec=cleanup_spec,
             knowledge_base=knowledge_base,
             image_store=image_store,
@@ -796,6 +933,8 @@ def main() -> None:
 
         progress_bar.progress(1.0)
         st.success(f"Analyse beendet. Ergebnis gespeichert unter: {args.output}")
+        if auto_report:
+            st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
 
     except Exception as exc:
         st.exception(exc)
