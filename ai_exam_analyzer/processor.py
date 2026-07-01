@@ -386,7 +386,7 @@ def process_questions(
     container: Optional[Dict[str, Any]],
     key_map: Dict[str, Dict[str, Any]],
     topic_catalog_text: str,
-    topic_catalog: Optional[List[Dict[str, Any]]] = None,
+    topic_catalog: Optional[List[Dict[str, Any]]],
     schema_a: Dict[str, Any],
     schema_b: Dict[str, Any],
     schema_review: Dict[str, Any],
@@ -413,6 +413,7 @@ def process_questions(
             schema_review=schema_review,
             schema_reconstruction=schema_reconstruction,
             schema_cluster_refinement=schema_cluster_refinement,
+            schema_explainer=schema_explainer,
             cleanup_spec=cleanup_spec,
             knowledge_base=knowledge_base,
             image_store=image_store,
@@ -630,7 +631,7 @@ def process_questions(
         audit: Dict[str, Any] = {
             "pipelineVersion": PIPELINE_VERSION,
             "status": "error",
-            "models": {"provider": provider, "passA": args.passA_model, "passB": None, "review": None},
+            "models": {"provider": provider, "passA": args.passA_model, "passB": None, "review": None, "explainer": None},
             "knowledge": {
                 "enabled": bool(knowledge_base is not None),
                 "retrievalQuality": retrieval_quality,
@@ -1511,6 +1512,7 @@ def process_questions(
                     schema=schema_explainer,
                     model=args.explainer_model,
                 )
+                audit.setdefault("models", {})["explainer"] = args.explainer_model
                 audit["explainer"] = expl
                 emit_progress(
                     event="explainer_question_finished",
@@ -1615,6 +1617,8 @@ def rerun_postprocessing_from_output(
     key_map: Dict[str, Dict[str, Any]],
     schema_review: Dict[str, Any],
     schema_reconstruction: Dict[str, Any],
+    schema_cluster_refinement: Dict[str, Any],
+    schema_explainer: Dict[str, Any],
     cleanup_spec: Optional[Dict[str, Any]] = None,
     knowledge_base: Optional[KnowledgeBase] = None,
     image_store: Optional[QuestionImageStore] = None,
@@ -1634,7 +1638,7 @@ def rerun_postprocessing_from_output(
         event="postprocess_only_started",
         stage="postprocessing",
         total=total_questions,
-        message="Postprocess-only Lauf gestartet (Review/Reconstruction).",
+        message="Postprocess-only Lauf gestartet (Review/Reconstruction/Explainer).",
     )
 
     dataset_context = build_dataset_context(
@@ -1663,6 +1667,7 @@ def rerun_postprocessing_from_output(
 
     review_done = 0
     reconstruction_done = 0
+    explainer_done = 0
     skipped = 0
 
     for i, q in enumerate(questions, start=1):
@@ -1697,7 +1702,7 @@ def rerun_postprocessing_from_output(
             stage="postprocessing",
             index=i,
             total=total_questions,
-            done=review_done + reconstruction_done,
+            done=review_done + reconstruction_done + explainer_done,
             skipped=skipped,
             message=f"Frage {i}/{total_questions} Postprocessing gestartet (ID: {qid}).",
         )
@@ -1748,7 +1753,7 @@ def rerun_postprocessing_from_output(
                     stage="postprocessing",
                     index=i,
                     total=total_questions,
-                    done=review_done + reconstruction_done,
+                    done=review_done + reconstruction_done + explainer_done,
                     skipped=skipped,
                     message=f"Review {i}/{total_questions} gestartet (Frage {qid}).",
                 )
@@ -1778,7 +1783,7 @@ def rerun_postprocessing_from_output(
                         stage="postprocessing",
                         index=i,
                         total=total_questions,
-                        done=review_done + reconstruction_done,
+                        done=review_done + reconstruction_done + explainer_done,
                         skipped=skipped,
                         message=f"Review {i}/{total_questions} abgeschlossen (Frage {qid}).",
                     )
@@ -1789,7 +1794,7 @@ def rerun_postprocessing_from_output(
                         stage="postprocessing",
                         index=i,
                         total=total_questions,
-                        done=review_done + reconstruction_done,
+                        done=review_done + reconstruction_done + explainer_done,
                         skipped=skipped,
                         error=str(review_exc),
                         message=f"Review {i}/{total_questions} fehlgeschlagen (Frage {qid}): {review_exc}",
@@ -1800,7 +1805,7 @@ def rerun_postprocessing_from_output(
                     stage="postprocessing",
                     index=i,
                     total=total_questions,
-                    done=review_done + reconstruction_done,
+                    done=review_done + reconstruction_done + explainer_done,
                     skipped=skipped,
                     message=f"Review {i}/{total_questions} übersprungen (bereits vorhanden, Frage {qid}).",
                 )
@@ -1814,7 +1819,7 @@ def rerun_postprocessing_from_output(
                     stage="postprocessing",
                     index=i,
                     total=total_questions,
-                    done=review_done + reconstruction_done,
+                    done=review_done + reconstruction_done + explainer_done,
                     skipped=skipped,
                     message=f"Reconstruction {i}/{total_questions} gestartet (Frage {qid}).",
                 )
@@ -1871,7 +1876,7 @@ def rerun_postprocessing_from_output(
                         stage="postprocessing",
                         index=i,
                         total=total_questions,
-                        done=review_done + reconstruction_done,
+                        done=review_done + reconstruction_done + explainer_done,
                         skipped=skipped,
                         message=f"Reconstruction {i}/{total_questions} abgeschlossen (Frage {qid}).",
                     )
@@ -1886,7 +1891,7 @@ def rerun_postprocessing_from_output(
                         stage="postprocessing",
                         index=i,
                         total=total_questions,
-                        done=review_done + reconstruction_done,
+                        done=review_done + reconstruction_done + explainer_done,
                         skipped=skipped,
                         error=str(rec_exc),
                         message=f"Reconstruction {i}/{total_questions} fehlgeschlagen (Frage {qid}): {rec_exc}",
@@ -1897,9 +1902,73 @@ def rerun_postprocessing_from_output(
                     stage="postprocessing",
                     index=i,
                     total=total_questions,
-                    done=review_done + reconstruction_done,
+                    done=review_done + reconstruction_done + explainer_done,
                     skipped=skipped,
                     message=f"Reconstruction {i}/{total_questions} übersprungen (bereits vorhanden, Frage {qid}).",
+                )
+
+
+        if bool(getattr(args, "enable_explainer_pass", False)):
+            current_explainer = audit.get("explainer")
+            should_rerun_explainer = bool(getattr(args, "force_rerun_explainer", False)) or not isinstance(current_explainer, dict) or ("error" in current_explainer)
+            if should_rerun_explainer:
+                emit_progress(
+                    event="explainer_question_started",
+                    stage="postprocessing",
+                    index=i,
+                    total=total_questions,
+                    done=review_done + reconstruction_done + explainer_done,
+                    skipped=skipped,
+                    message=f"Explainer {i}/{total_questions} gestartet (Frage {qid}).",
+                )
+                payload_for_explainer = dict(payload)
+                payload_for_explainer["aiAudit"] = {
+                    "topicFinal": (audit.get("topicFinal") or {}),
+                    "answerPlausibility": (audit.get("answerPlausibility") or {}),
+                    "maintenance": (audit.get("maintenance") or {}),
+                    "clusters": (audit.get("clusters") or {}),
+                    "reconstruction": (audit.get("reconstruction") or {}),
+                }
+                try:
+                    expl = run_explainer_pass(
+                        client,
+                        payload=payload_for_explainer,
+                        schema=schema_explainer,
+                        model=args.explainer_model,
+                    )
+                    audit.setdefault("models", {})["explainer"] = args.explainer_model
+                    audit["explainer"] = expl
+                    explainer_done += 1
+                    emit_progress(
+                        event="explainer_question_finished",
+                        stage="postprocessing",
+                        index=i,
+                        total=total_questions,
+                        done=review_done + reconstruction_done + explainer_done,
+                        skipped=skipped,
+                        message=f"Explainer {i}/{total_questions} abgeschlossen (Frage {qid}).",
+                    )
+                except Exception as expl_exc:
+                    audit["explainer"] = {"error": str(expl_exc)}
+                    emit_progress(
+                        event="explainer_question_error",
+                        stage="postprocessing",
+                        index=i,
+                        total=total_questions,
+                        done=review_done + reconstruction_done + explainer_done,
+                        skipped=skipped,
+                        error=str(expl_exc),
+                        message=f"Explainer {i}/{total_questions} fehlgeschlagen (Frage {qid}): {expl_exc}",
+                    )
+            else:
+                emit_progress(
+                    event="explainer_question_skipped",
+                    stage="postprocessing",
+                    index=i,
+                    total=total_questions,
+                    done=review_done + reconstruction_done + explainer_done,
+                    skipped=skipped,
+                    message=f"Explainer {i}/{total_questions} übersprungen (bereits vorhanden, Frage {qid}).",
                 )
 
         emit_progress(
@@ -1907,7 +1976,7 @@ def rerun_postprocessing_from_output(
             stage="postprocessing",
             index=i,
             total=total_questions,
-            done=review_done + reconstruction_done,
+            done=review_done + reconstruction_done + explainer_done,
             skipped=skipped,
             message=f"Frage {i}/{total_questions} Postprocessing abgeschlossen (ID: {qid}).",
         )
@@ -1940,7 +2009,7 @@ def rerun_postprocessing_from_output(
             stage="clustering",
             index=idx,
             total=total_questions,
-            done=review_done + reconstruction_done,
+            done=review_done + reconstruction_done + explainer_done,
             skipped=skipped,
             message=f"Abstraktions-Clustering {idx}/{total_questions}: Cluster für Frage {qid} aktualisiert.",
         )
@@ -1959,7 +2028,7 @@ def rerun_postprocessing_from_output(
         event="postprocess_only_finished",
         stage="postprocessing",
         total=total_questions,
-        done=review_done + reconstruction_done,
+        done=review_done + reconstruction_done + explainer_done,
         skipped=skipped,
-        message=f"Postprocess-only abgeschlossen (review aktualisiert: {review_done}, reconstruction aktualisiert: {reconstruction_done}, ohne aiAudit: {skipped}).",
+        message=f"Postprocess-only abgeschlossen (review aktualisiert: {review_done}, reconstruction aktualisiert: {reconstruction_done}, explainer aktualisiert: {explainer_done}, ohne aiAudit: {skipped}).",
     )
