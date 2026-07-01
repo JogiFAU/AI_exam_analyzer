@@ -11,6 +11,15 @@ def is_reasoning_model(model: str) -> bool:
     return m.startswith("o") or m.startswith("gpt-5")
 
 
+def _normalize_reasoning_effort(model: str, reasoning_effort: Optional[str]) -> Optional[str]:
+    effort = (reasoning_effort or "").strip().lower()
+    if not effort:
+        return None
+    if effort == "xhigh" and not (model or "").lower().strip().startswith("gpt-5"):
+        return "high"
+    return effort
+
+
 def call_json_schema(
     client: Any,
     *,
@@ -110,8 +119,9 @@ def call_json_schema(
         if send_temperature and temperature is not None:
             params["temperature"] = temperature
 
-        if is_reasoning_model(model) and reasoning_effort:
-            params["reasoning"] = {"effort": reasoning_effort}
+        normalized_effort = _normalize_reasoning_effort(model, reasoning_effort)
+        if is_reasoning_model(model) and normalized_effort:
+            params["reasoning"] = {"effort": normalized_effort}
 
         resp = client.responses.create(**params)
         resp = _poll_response_until_terminal(resp)

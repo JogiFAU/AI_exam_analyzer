@@ -61,7 +61,7 @@ def _provider_ui_defaults(provider: str) -> Dict[str, Any]:
     p = (provider or "openai").strip().lower()
     if p == "gemini":
         return {
-            "pass_a_temperature": 0.0,
+            "pass_a_temperature": 1.0,
             "pass_b_reasoning_effort": "medium",
             "trigger_answer_conf": 0.85,
             "trigger_topic_conf": 0.88,
@@ -523,7 +523,7 @@ def _build_args() -> SimpleNamespace:
                     value=str(default_explainer_model),
                     key=f"{llm_provider}_postprocess_explainer_model",
                     disabled=not enable_explainer_pass,
-                    help="Standard ist GPT-5.5 für bessere didaktische Erklärungen und strukturierte Ausgabe.",
+                    help="Standard ist GPT-5.5 (OpenAI) bzw. Gemini 3.5 Flash (Gemini) für bessere didaktische Erklärungen und strukturierte Ausgabe.",
                 )
                 st.caption("Nicht relevant in diesem Modus: Resume, Pass A/B, Repeat-Reconstruction, Sleep/Limit.")
                 resume = False
@@ -570,8 +570,8 @@ def _build_args() -> SimpleNamespace:
                 )
                 pass_b_reasoning_effort = st.selectbox(
                     "Pass B Reasoning Effort",
-                    options=["low", "medium", "high"],
-                    index=["low", "medium", "high"].index(str(provider_defaults["pass_b_reasoning_effort"])),
+                    options=["low", "medium", "high", "xhigh"],
+                    index=["low", "medium", "high", "xhigh"].index(str(provider_defaults["pass_b_reasoning_effort"])),
                     help="Rechenaufwand für Pass B.",
                     disabled=auto_dataset_tuning,
                 )

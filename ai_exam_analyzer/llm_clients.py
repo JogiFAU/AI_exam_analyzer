@@ -58,7 +58,6 @@ class GeminiResponsesAdapter:
         del format_name, reasoning_effort
 
         contents: List[Dict[str, Any]] = []
-        contents.append({"role": "user", "parts": [{"text": system}]})
         if isinstance(user, str):
             contents.append({"role": "user", "parts": [{"text": user}]})
         else:
@@ -85,6 +84,7 @@ class GeminiResponsesAdapter:
             "response_mime_type": "application/json",
             "response_schema": schema,
             "max_output_tokens": int(max(256, max_output_tokens)),
+            "system_instruction": system,
         }
         if temperature is not None:
             config["temperature"] = float(temperature)

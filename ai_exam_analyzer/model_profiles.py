@@ -27,7 +27,7 @@ def derive_workflow_budget(*, provider: str, pass_a_model: str, pass_b_model: st
         top_k = max(top_k, 8)
         max_chars = max(max_chars, 6500)
         min_score = max(0.03, min(min_score, 0.05))
-        if "2.5-pro" in model_hint or "1.5-pro" in model_hint:
+        if "pro" in model_hint:
             top_k = max(top_k, 10)
             max_chars = max(max_chars, 8000)
     else:
