@@ -246,6 +246,63 @@ def _score_cluster_overlap(source_items: List[Dict[str, Any]], target_items: Lis
     return float(inter) / float(max(1, union))
 
 
+def _cluster_topic_diversity(items: List[Dict[str, Any]]) -> int:
+    topics = {str(x.get("topicKey") or "").strip() for x in items}
+    topics.discard("")
+    return len(topics)
+
+
+def _needs_llm_cluster_refinement(
+    source_items: List[Dict[str, Any]],
+    scored_others: List[tuple[str, List[Dict[str, Any]]]],
+) -> bool:
+    """Cheap deterministic gate before paying for an LLM refinement call."""
+    if len(source_items) < 2:
+        return False
+    if _cluster_topic_diversity(source_items) > 1:
+        return True
+    top_overlap = _score_cluster_overlap(source_items, scored_others[0][1]) if scored_others else 0.0
+    if top_overlap >= 0.08:
+        return True
+    summaries = [_simple_tokenize(str(x.get("summary") or "")) for x in source_items]
+    pair_scores: List[float] = []
+    for i, left in enumerate(summaries):
+        for right in summaries[i + 1 :]:
+            if not left or not right:
+                continue
+            pair_scores.append(len(left & right) / max(1, len(left | right)))
+    if pair_scores and min(pair_scores) < 0.10:
+        return True
+    return False
+
+
+def _store_cluster_refinement_result(
+    *,
+    question_by_id: Dict[str, Dict[str, Any]],
+    question_ids: List[str],
+    source_cid: str,
+    model: str,
+    decision: Dict[str, Any],
+    removed_ids: List[str],
+    merge_target: str,
+) -> None:
+    record = {
+        "sourceClusterId": source_cid,
+        "model": model,
+        "removeQuestionIds": removed_ids,
+        "mergeIntoClusterId": merge_target,
+        "confidence": decision.get("confidence"),
+        "reason": decision.get("reason"),
+    }
+    for qid in question_ids:
+        q = question_by_id.get(qid)
+        if not q:
+            continue
+        audit = q.setdefault("aiAudit", {})
+        clusters = audit.setdefault("clusters", {})
+        clusters["abstractionClusterRefinement"] = record
+
+
 def _apply_llm_abstraction_cluster_refinement(
     *,
     args: Any,
@@ -287,6 +344,7 @@ def _apply_llm_abstraction_cluster_refinement(
     min_size = max(2, int(getattr(args, "cluster_refinement_min_cluster_size", 2) or 2))
     max_clusters = max(1, int(getattr(args, "cluster_refinement_max_clusters", 30) or 30))
     merge_candidates_n = max(1, int(getattr(args, "cluster_refinement_merge_candidates", 5) or 5))
+    refinement_model = str(getattr(args, "cluster_refinement_model", "gpt-5.4-mini") or "gpt-5.4-mini")
 
     candidates = [(cid, rows) for cid, rows in cluster_to_items.items() if len(rows) >= min_size]
     candidates.sort(key=lambda x: len(x[1]), reverse=True)
@@ -302,6 +360,15 @@ def _apply_llm_abstraction_cluster_refinement(
 
         others = [(cid, rows) for cid, rows in cluster_to_items.items() if cid != source_cid and len(rows) >= min_size]
         scored = sorted(others, key=lambda x: _score_cluster_overlap(source_rows, x[1]), reverse=True)
+        if not _needs_llm_cluster_refinement(source_rows, scored):
+            emit_progress(
+                event="abstraction_cluster_refinement_skipped",
+                stage="clustering",
+                index=idx,
+                total=len(candidates),
+                message=f"LLM-Cluster-Refinement {idx}/{len(candidates)} übersprungen (Cluster {source_cid}: deterministisch homogen, keine Merge-Kandidaten).",
+            )
+            continue
         merge_candidates = [
             {
                 "clusterId": cid,
@@ -332,7 +399,7 @@ def _apply_llm_abstraction_cluster_refinement(
                 client,
                 payload=payload,
                 schema=schema_cluster_refinement,
-                model=getattr(args, "cluster_refinement_model", "o4-mini"),
+                model=refinement_model,
             )
         except Exception as exc:
             emit_progress(
@@ -345,7 +412,8 @@ def _apply_llm_abstraction_cluster_refinement(
             )
             continue
 
-        remove_ids = [str(x) for x in (decision.get("removeQuestionIds") or []) if str(x) in {r["questionId"] for r in source_rows}]
+        source_question_ids = [str(r["questionId"]) for r in source_rows]
+        remove_ids = [str(x) for x in (decision.get("removeQuestionIds") or []) if str(x) in set(source_question_ids)]
         for qid in remove_ids:
             q = question_by_id.get(qid)
             if not q:
@@ -389,6 +457,16 @@ def _apply_llm_abstraction_cluster_refinement(
                 q["aiAudit"] = audit
             cluster_to_items[merge_target].extend(moving)
             del cluster_to_items[source_cid]
+
+        _store_cluster_refinement_result(
+            question_by_id=question_by_id,
+            question_ids=source_question_ids,
+            source_cid=source_cid,
+            model=refinement_model,
+            decision=decision,
+            removed_ids=remove_ids,
+            merge_target=merge_target,
+        )
 
         emit_progress(
             event="abstraction_cluster_refinement_finished",
