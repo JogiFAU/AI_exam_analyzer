@@ -61,7 +61,7 @@ def _provider_ui_defaults(provider: str) -> Dict[str, Any]:
     p = (provider or "openai").strip().lower()
     if p == "gemini":
         return {
-            "pass_a_temperature": 0.0,
+            "pass_a_temperature": 1.0,
             "pass_b_reasoning_effort": "medium",
             "trigger_answer_conf": 0.85,
             "trigger_topic_conf": 0.88,
@@ -206,11 +206,12 @@ def _build_args() -> SimpleNamespace:
         st.header("Einstellungen")
         run_mode = st.radio(
             "Modus",
-            options=["Vollständige Analyse", "Parameter-Einstellung", "Postprocessing only"],
+            options=["Vollständige Analyse", "Parameter-Einstellung", "Postprocessing only", "Explainer only"],
             index=0,
-            help="Im Postprocessing-only Modus werden nur Review/Reconstruction auf bestehendem aiAudit neu berechnet.",
+            help="Postprocessing-only berechnet Review/Reconstruction auf bestehendem aiAudit neu; Explainer-only berechnet nur didaktische Erklärungen für bereits annotierte Daten.",
         )
-        is_postprocess_only = (run_mode == "Postprocessing only")
+        is_postprocess_only = (run_mode in {"Postprocessing only", "Explainer only"})
+        is_explainer_only = (run_mode == "Explainer only")
         is_tuning_only = (run_mode == "Parameter-Einstellung")
 
         with st.expander("📁 Datenquellen", expanded=True):
@@ -461,7 +462,7 @@ def _build_args() -> SimpleNamespace:
 
             enable_review_pass = st.checkbox(
                 "Pass C (Deep Review) aktivieren",
-                value=bool(CONFIG["ENABLE_REVIEW_PASS"]),
+                value=(False if is_explainer_only else bool(CONFIG["ENABLE_REVIEW_PASS"])),
                 help="Optionaler dritter Review-Pass für wartungsintensive Fragen.",
             )
             review_model = st.text_input(
@@ -481,7 +482,7 @@ def _build_args() -> SimpleNamespace:
 
             enable_reconstruction_pass = st.checkbox(
                 "Reconstruction-Pass aktivieren",
-                value=bool(CONFIG["ENABLE_RECONSTRUCTION_PASS"]),
+                value=(False if is_explainer_only else bool(CONFIG["ENABLE_RECONSTRUCTION_PASS"])),
                 help="Führt eine Rekonstruktions-/Altfrage-Bewertung pro Frage aus und annotiert das Ergebnis.",
             )
             reconstruction_model = st.text_input(
@@ -493,20 +494,38 @@ def _build_args() -> SimpleNamespace:
 
             force_rerun_review = False
             force_rerun_reconstruction = False
+            force_rerun_explainer = False
 
             if is_postprocess_only:
                 st.caption("Postprocessing-only: nur fehlende/fehlerhafte Ergebnisse werden neu berechnet (optional erzwingen).")
                 force_rerun_review = st.checkbox(
                     "Review immer neu berechnen",
                     value=False,
-                    disabled=not enable_review_pass,
+                    disabled=(is_explainer_only or not enable_review_pass),
                 )
                 force_rerun_reconstruction = st.checkbox(
                     "Reconstruction immer neu berechnen",
                     value=False,
-                    disabled=not enable_reconstruction_pass,
+                    disabled=(is_explainer_only or not enable_reconstruction_pass),
                 )
-                st.caption("Nicht relevant in diesem Modus: Resume, Pass A/B, Repeat-Reconstruction, Explainer, Sleep/Limit.")
+                enable_explainer_pass = True if is_explainer_only else st.checkbox(
+                    "Explainer-Pass aktivieren",
+                    value=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
+                    help="Erzeugt didaktische Erklärungen auf bestehendem aiAudit.",
+                )
+                force_rerun_explainer = st.checkbox(
+                    "Explainer immer neu berechnen",
+                    value=is_explainer_only,
+                    disabled=not enable_explainer_pass,
+                )
+                explainer_model = st.text_input(
+                    "Explainer Modell",
+                    value=str(default_explainer_model),
+                    key=f"{llm_provider}_postprocess_explainer_model",
+                    disabled=not enable_explainer_pass,
+                    help="Standard ist GPT-5.5 (OpenAI) bzw. Gemini 3.5 Flash (Gemini) für bessere didaktische Erklärungen und strukturierte Ausgabe.",
+                )
+                st.caption("Nicht relevant in diesem Modus: Resume, Pass A/B, Repeat-Reconstruction, Sleep/Limit.")
                 resume = False
                 limit = 0
                 sleep_seconds = 0.0
@@ -524,8 +543,8 @@ def _build_args() -> SimpleNamespace:
                 repeat_min_anchor_conf = float(CONFIG["REPEAT_MIN_ANCHOR_CONF"])
                 repeat_min_anchor_consensus = int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"])
                 repeat_min_match_ratio = float(CONFIG["REPEAT_MIN_MATCH_RATIO"])
-                enable_explainer_pass = False
-                explainer_model = str(default_explainer_model)
+                enable_explainer_pass = bool(enable_explainer_pass)
+                explainer_model = str(explainer_model)
                 write_top_level = bool(CONFIG["WRITE_TOP_LEVEL"])
                 debug = bool(CONFIG["DEBUG"])
             else:
@@ -551,8 +570,8 @@ def _build_args() -> SimpleNamespace:
                 )
                 pass_b_reasoning_effort = st.selectbox(
                     "Pass B Reasoning Effort",
-                    options=["low", "medium", "high"],
-                    index=["low", "medium", "high"].index(str(provider_defaults["pass_b_reasoning_effort"])),
+                    options=["low", "medium", "high", "xhigh"],
+                    index=["low", "medium", "high", "xhigh"].index(str(provider_defaults["pass_b_reasoning_effort"])),
                     help="Rechenaufwand für Pass B.",
                     disabled=auto_dataset_tuning,
                 )
@@ -649,6 +668,7 @@ def _build_args() -> SimpleNamespace:
         tuning_only=bool(is_tuning_only),
         force_rerun_review=bool(force_rerun_review),
         force_rerun_reconstruction=bool(force_rerun_reconstruction),
+        force_rerun_explainer=bool(force_rerun_explainer),
         only_question_ids=[x.strip() for x in (only_question_ids_raw or "").split(",") if x.strip()],
         input=input_path,
         topics=topics_path,
@@ -748,7 +768,7 @@ def main() -> None:
     args = _build_args()
     apply_model_optimized_defaults(args)
 
-    start_label = "Parameter-Einstellung starten" if bool(getattr(args, "tuning_only", False)) else ("Postprocessing starten" if bool(getattr(args, "postprocess_only", False)) else "Analyse starten")
+    start_label = "Parameter-Einstellung starten" if bool(getattr(args, "tuning_only", False)) else (("Explainer-Pass starten" if bool(getattr(args, "enable_explainer_pass", False)) and not bool(getattr(args, "enable_review_pass", False)) and not bool(getattr(args, "enable_reconstruction_pass", False)) else "Postprocessing starten") if bool(getattr(args, "postprocess_only", False)) else "Analyse starten")
     start_button = st.button(start_label, type="primary", use_container_width=True)
 
     progress_bar = st.progress(0)
