@@ -451,7 +451,13 @@ def process_questions(
     report: Dict[str, Any] = {
         "totalQuestions": total_questions,
         "preprocessing": {"runLlmFalse": 0, "allowAutoChangeFalse": 0, "forceManualReview": 0},
-        "topicCandidates": {"questionsWithCandidates": 0, "passAOutsideCandidates": 0, "finalOutsideCandidates": 0, "passBTriggeredByCandidateConflict": 0},
+        "topicCandidates": {
+            "questionsWithCandidates": 0,
+            "passAOutsideCandidates": 0,
+            "finalOutsideCandidates": 0,
+            "passBTriggeredByCandidateConflict": 0,
+            "passBTriggeredByAmbiguousCandidates": 0,
+        },
         "passes": {"passBRan": 0, "reviewRan": 0},
         "topicDrift": {"passAInitialVsFinal": 0},
         "autoChange": {"blockedByGate": 0},
@@ -768,19 +774,27 @@ def process_questions(
             verification: Dict[str, Any] = {"ran": False}
             verifier_agreed: Optional[bool] = None
 
-            candidate_keys = {str(x.get("topicKey")) for x in (payload.get("topicCandidates") or []) if x.get("topicKey")}
+            topic_candidates = payload.get("topicCandidates") or []
+            candidate_keys = {str(x.get("topicKey")) for x in topic_candidates if x.get("topicKey")}
             pass_a_topic_key = str(pass_a["topic_final"].get("topicKey") or "")
             pass_a_topic_conf = float(pass_a["topic_final"].get("confidence", 0.0))
             candidate_conflict = bool(candidate_keys) and pass_a_topic_key not in candidate_keys
             if candidate_conflict:
                 report["topicCandidates"]["passAOutsideCandidates"] += 1
 
+            ambiguous_relative_threshold = float(getattr(args, "topic_candidate_ambiguous_relative_score", 0.82))
+            second_relative_score = float(topic_candidates[1].get("relativeScore", 0.0)) if len(topic_candidates) > 1 else 0.0
+            candidate_ambiguous = bool(topic_candidates) and second_relative_score >= ambiguous_relative_threshold
+
             ran_b_base = should_run_pass_b(pass_a, args.trigger_answer_conf, args.trigger_topic_conf)
             candidate_force_b = candidate_conflict and pass_a_topic_conf < float(getattr(args, "topic_candidate_outside_force_passb_conf", 0.92))
+            candidate_ambiguous_force_b = candidate_ambiguous and pass_a_topic_conf < 0.97
             low_retrieval_force_b = bool(workflow_profile.force_pass_b_when_low_retrieval and retrieval_quality < float(workflow_profile.force_pass_b_retrieval_threshold))
-            ran_b = bool(ran_b_base or candidate_force_b or low_retrieval_force_b)
+            ran_b = bool(ran_b_base or candidate_force_b or candidate_ambiguous_force_b or low_retrieval_force_b)
             if candidate_force_b:
                 report["topicCandidates"]["passBTriggeredByCandidateConflict"] += 1
+            if candidate_ambiguous_force_b:
+                report["topicCandidates"]["passBTriggeredByAmbiguousCandidates"] += 1
 
             pass_b: Optional[Dict[str, Any]] = None
 

@@ -98,6 +98,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Run review pass only for maintenance severity >= this value")
     ap.add_argument("--topic-candidate-top-k", type=int, default=CONFIG["TOPIC_CANDIDATE_TOP_K"],
                     help="How many deterministic topic candidates to attach per question")
+    ap.add_argument("--topic-candidate-ambiguous-relative-score", type=float,
+                    default=CONFIG["TOPIC_CANDIDATE_AMBIGUOUS_RELATIVE_SCORE"],
+                    help="Run Pass B when the second deterministic topic candidate is this close to the first")
     ap.add_argument("--run-report", default=CONFIG["RUN_REPORT_PATH"],
                     help="Optional JSON path for workflow run metrics/report")
     ap.add_argument("--topic-candidate-outside-force-passb-conf", type=float,
