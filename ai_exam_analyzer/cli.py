@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--passB-model", default=CONFIG["PASSB_MODEL"])
     ap.add_argument("--passA-temperature", type=float, default=CONFIG["PASSA_TEMPERATURE"])
     ap.add_argument("--passB-reasoning-effort", default=CONFIG["PASSB_REASONING_EFFORT"],
-                    choices=["low", "medium", "high"])
+                    choices=["low", "medium", "high", "xhigh"])
 
     ap.add_argument("--trigger-answer-conf", type=float, default=CONFIG["TRIGGER_ANSWER_CONF"])
     ap.add_argument("--trigger-topic-conf", type=float, default=CONFIG["TRIGGER_TOPIC_CONF"])
@@ -160,6 +160,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="In --postprocess-only mode: rerun review pass even if reviewPass already exists")
     ap.add_argument("--force-rerun-reconstruction", dest="force_rerun_reconstruction", action="store_true", default=False,
                     help="In --postprocess-only mode: rerun reconstruction pass even if reconstruction already exists")
+    ap.add_argument("--force-rerun-explainer", dest="force_rerun_explainer", action="store_true", default=False,
+                    help="In --postprocess-only mode: rerun explainer pass even if explainer already exists")
     ap.add_argument(
         "--only-question-id",
         dest="only_question_ids",
@@ -228,6 +230,8 @@ def main() -> None:
         args.reconstruction_model = CONFIG["RECONSTRUCTION_MODEL_GEMINI"]
     if provider == "gemini" and args.explainer_model == CONFIG["EXPLAINER_MODEL"]:
         args.explainer_model = CONFIG["EXPLAINER_MODEL_GEMINI"]
+    if provider == "gemini" and args.cluster_refinement_model == CONFIG["CLUSTER_REFINEMENT_MODEL"]:
+        args.cluster_refinement_model = CONFIG["CLUSTER_REFINEMENT_MODEL_GEMINI"]
 
     apply_model_optimized_defaults(args)
 
