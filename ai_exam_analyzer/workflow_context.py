@@ -5,16 +5,22 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 
 STOPWORDS_DE = {
     "aber", "alle", "als", "also", "am", "an", "auch", "auf", "aus", "bei", "der", "die", "das", "dem", "den",
-    "ein", "eine", "einer", "einem", "einen", "für", "im", "in", "ist", "mit", "nicht", "oder", "und", "von", "zu",
+    "ein", "eine", "einer", "einem", "einen", "für", "im", "in", "ist", "mit", "nach", "nicht", "oder", "und", "von", "zu",
+    "frage", "abfrage", "erscheint",
 }
 
 TEMPLATE_TOKENS = {
-    "was", "welche", "welcher", "welches", "aussage", "stimmt", "trifft", "ehesten", "richtig", "falsch", "liegt", "vor",
+    # Frage-/MC-Formulierungen: diese Wörter beschreiben die Aufgabenstruktur,
+    # nicht den fachlichen Inhalt, und dürfen Cluster nicht dominieren.
+    "was", "wer", "wie", "wo", "wann", "warum", "wieso", "welche", "welcher", "welches", "welchen",
+    "aussage", "aussagen", "antwort", "antworten", "option", "optionen", "folgende", "folgenden",
+    "stimmt", "trifft", "ehesten", "richtig", "falsch", "korrekt", "inkorrekt", "liegt", "vor", "gehört",
+    "bezüglich", "hinsichtlich", "genannt", "nennen", "wählen", "ausnahme", "nicht", "kein", "keine",
 }
 
 
@@ -34,15 +40,60 @@ class _UnionFind:
             self.parent[rb] = ra
 
 
+def _normalize_token(token: str) -> str:
+    # Lightweight German/medical normalization. This intentionally avoids heavy
+    # stemming so fachliche Minimalpaare erhalten bleiben, reduziert aber Plural-
+    # und Flexionsvarianten, die sonst inhaltlich gleiche Fragen trennen.
+    replacements = {"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"}
+    for src, dst in replacements.items():
+        token = token.replace(src, dst)
+    synonym_map = {
+        "streptococcus": "pneumokokk",  # in Kombination mit pneumoniae über Bigramm/Einzelanker hilfreich
+        "pneumoniae": "pneumokokk",
+        "pneumokokken": "pneumokokk",
+        "pneumokokkus": "pneumokokk",
+        "grampräparat": "gramfaerbung",
+        "grampraeparat": "gramfaerbung",
+        "gramfaerbung": "gramfaerbung",
+        "gramfärbung": "gramfaerbung",
+        "morphologisch": "morphologie",
+        "morphologischen": "morphologie",
+        "morphologi": "morphologie",
+        "isolationsmassnahmen": "isolation",
+        "isolationsmaßnahmen": "isolation",
+        "schutzmasken": "schutzmaske",
+    }
+    if token in synonym_map:
+        return synonym_map[token]
+    for suffix in ("ungen", "heiten", "keiten", "ischer", "liche", "lichen", "igkeit", "ionen"):
+        if len(token) > len(suffix) + 4 and token.endswith(suffix):
+            token = token[: -len(suffix)]
+            return synonym_map.get(token, token)
+    for suffix in ("ern", "er", "en", "es", "s"):
+        if len(token) > len(suffix) + 5 and token.endswith(suffix):
+            token = token[: -len(suffix)]
+            return synonym_map.get(token, token)
+    return synonym_map.get(token, token)
+
+
 def _tokenize(text: str) -> Set[str]:
     out: Set[str] = set()
+    ordered: List[str] = []
     for raw in (text or "").lower().replace("\n", " ").split():
         token = "".join(ch for ch in raw if ch.isalnum() or ch in "äöüß")
+        token = _normalize_token(token)
         if len(token) < 3:
             continue
         if token in STOPWORDS_DE or token in TEMPLATE_TOKENS:
             continue
         out.add(token)
+        ordered.append(token)
+
+    # Inhalts-Bigramme erhöhen die Präzision: „gram positiv“, „streptococcus
+    # pneumoniae“ oder „hiv therapie“ sind bessere Clusteranker als Einzelwörter.
+    for left, right in zip(ordered, ordered[1:]):
+        if left != right:
+            out.add(f"{left}_{right}")
     return out
 
 
@@ -59,7 +110,10 @@ def _prune_frequent_tokens(items: List[Set[str]], max_doc_frequency_ratio: float
     if n < 5:
         return items, dict(df)
 
-    max_df = max(2, int(n * max_doc_frequency_ratio))
+    # Keep repeated domain anchors in small/medium datasets. A low absolute cap
+    # would erase exactly the entities that define legitimate repeated-question
+    # clusters (e.g. the same pathogen appearing in three variants).
+    max_df = max(4, int(n * max_doc_frequency_ratio))
     pruned = [{tok for tok in toks if df.get(tok, 0) <= max_df} for toks in items]
     return pruned, dict(df)
 
@@ -115,7 +169,13 @@ def _candidate_pairs_topk(items: List[Set[str]], *, df: Dict[str, int], top_k: i
     return pairs
 
 
-def _cluster_by_similarity(items: List[Set[str]], threshold: float, *, df: Dict[str, int]) -> List[int]:
+def _cluster_by_similarity(
+    items: List[Set[str]],
+    threshold: float,
+    *,
+    df: Dict[str, int],
+    topic_keys: Optional[Sequence[str]] = None,
+) -> List[int]:
     n = len(items)
     uf = _UnionFind(n)
 
@@ -123,14 +183,20 @@ def _cluster_by_similarity(items: List[Set[str]], threshold: float, *, df: Dict[
         left, right = items[i], items[j]
         if not left or not right:
             continue
+        if topic_keys is not None:
+            topic_left = (topic_keys[i] or "").strip()
+            topic_right = (topic_keys[j] or "").strip()
+            if topic_left and topic_right and topic_left != topic_right:
+                continue
         if len(left) < 4 or len(right) < 4:
             continue
         shared_rare = _shared_rare_count(left, right, df=df, n_docs=n, min_idf=1.8)
         shared_all = len(left & right)
-        if shared_rare < 1 and shared_all < 2:
+        if shared_rare < 2 and shared_all < 3:
             continue
         sim = _weighted_jaccard(left, right, df=df, n_docs=n)
-        if sim >= threshold:
+        containment = len(left & right) / max(1, min(len(left), len(right)))
+        if sim >= threshold and containment >= 0.28:
             uf.union(i, j)
 
     root_to_cluster: Dict[int, int] = {}
@@ -205,17 +271,21 @@ def cluster_abstractions(
 ) -> Dict[str, Any]:
     abstractions: List[str] = []
     question_ids: List[str] = []
+    topic_keys: List[str] = []
     for q in questions:
         qid = str(q.get("id") or "")
-        abstraction = (((q.get("aiAudit") or {}).get("questionAbstraction") or {}).get("summary") or "").strip()
+        audit = q.get("aiAudit") or {}
+        abstraction = (((audit.get("questionAbstraction") or {}).get("summary") or "").strip())
         if not abstraction:
             abstraction = (q.get("questionText") or "").strip()
+        topic_key = ((audit.get("topicFinal") or {}).get("topicKey") or (audit.get("topicInitial") or {}).get("topicKey") or "")
         abstractions.append(abstraction)
         question_ids.append(qid)
+        topic_keys.append(str(topic_key))
 
     abstraction_sets = [_tokenize(x) for x in abstractions]
-    abstraction_sets, df = _prune_frequent_tokens(abstraction_sets)
-    cluster_ids = _cluster_by_similarity(abstraction_sets, threshold, df=df)
+    abstraction_sets, df = _prune_frequent_tokens(abstraction_sets, max_doc_frequency_ratio=0.08)
+    cluster_ids = _cluster_by_similarity(abstraction_sets, threshold, df=df, topic_keys=topic_keys)
     q_to_cluster = {qid: cid for qid, cid in zip(question_ids, cluster_ids)}
     cluster_to_qids: Dict[int, List[str]] = defaultdict(list)
     for qid, cid in q_to_cluster.items():

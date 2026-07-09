@@ -270,7 +270,19 @@ def _apply_llm_abstraction_cluster_refinement(
         cid_s = str(cid)
         topic_key = ((audit.get("topicFinal") or {}).get("topicKey") or (audit.get("topicInitial") or {}).get("topicKey") or "")
         summary = (((audit.get("questionAbstraction") or {}).get("summary") or "").strip() or (q.get("questionText") or "")[:220])
-        cluster_to_items.setdefault(cid_s, []).append({"questionId": qid, "summary": summary, "topicKey": str(topic_key)})
+        answers = []
+        for answer in (q.get("answers") or [])[:6]:
+            answers.append({
+                "text": str(answer.get("text") or "")[:220],
+                "isCorrect": bool(answer.get("isCorrect", False)),
+            })
+        cluster_to_items.setdefault(cid_s, []).append({
+            "questionId": qid,
+            "summary": summary,
+            "topicKey": str(topic_key),
+            "questionText": str(q.get("questionText") or "")[:320],
+            "answers": answers,
+        })
 
     min_size = max(2, int(getattr(args, "cluster_refinement_min_cluster_size", 2) or 2))
     max_clusters = max(1, int(getattr(args, "cluster_refinement_max_clusters", 30) or 30))
@@ -345,10 +357,18 @@ def _apply_llm_abstraction_cluster_refinement(
             clusters["abstractionClusterId"] = next_cluster_id
             audit["clusters"] = clusters
             q["aiAudit"] = audit
+            answers = []
+            for answer in (q.get("answers") or [])[:6]:
+                answers.append({
+                    "text": str(answer.get("text") or "")[:220],
+                    "isCorrect": bool(answer.get("isCorrect", False)),
+                })
             cluster_to_items.setdefault(str(next_cluster_id), []).append({
                 "questionId": qid,
                 "summary": (((audit.get("questionAbstraction") or {}).get("summary") or "").strip() or (q.get("questionText") or "")[:220]),
                 "topicKey": str(((audit.get("topicFinal") or {}).get("topicKey") or "")),
+                "questionText": str(q.get("questionText") or "")[:320],
+                "answers": answers,
             })
             next_cluster_id += 1
 
@@ -432,7 +452,13 @@ def process_questions(
     report: Dict[str, Any] = {
         "totalQuestions": total_questions,
         "preprocessing": {"runLlmFalse": 0, "allowAutoChangeFalse": 0, "forceManualReview": 0},
-        "topicCandidates": {"questionsWithCandidates": 0, "passAOutsideCandidates": 0, "finalOutsideCandidates": 0, "passBTriggeredByCandidateConflict": 0},
+        "topicCandidates": {
+            "questionsWithCandidates": 0,
+            "passAOutsideCandidates": 0,
+            "finalOutsideCandidates": 0,
+            "passBTriggeredByCandidateConflict": 0,
+            "passBTriggeredByAmbiguousCandidates": 0,
+        },
         "passes": {"passBRan": 0, "reviewRan": 0},
         "topicDrift": {"passAInitialVsFinal": 0},
         "autoChange": {"blockedByGate": 0},
@@ -749,19 +775,27 @@ def process_questions(
             verification: Dict[str, Any] = {"ran": False}
             verifier_agreed: Optional[bool] = None
 
-            candidate_keys = {str(x.get("topicKey")) for x in (payload.get("topicCandidates") or []) if x.get("topicKey")}
+            topic_candidates = payload.get("topicCandidates") or []
+            candidate_keys = {str(x.get("topicKey")) for x in topic_candidates if x.get("topicKey")}
             pass_a_topic_key = str(pass_a["topic_final"].get("topicKey") or "")
             pass_a_topic_conf = float(pass_a["topic_final"].get("confidence", 0.0))
             candidate_conflict = bool(candidate_keys) and pass_a_topic_key not in candidate_keys
             if candidate_conflict:
                 report["topicCandidates"]["passAOutsideCandidates"] += 1
 
+            ambiguous_relative_threshold = float(getattr(args, "topic_candidate_ambiguous_relative_score", 0.82))
+            second_relative_score = float(topic_candidates[1].get("relativeScore", 0.0)) if len(topic_candidates) > 1 else 0.0
+            candidate_ambiguous = bool(topic_candidates) and second_relative_score >= ambiguous_relative_threshold
+
             ran_b_base = should_run_pass_b(pass_a, args.trigger_answer_conf, args.trigger_topic_conf)
             candidate_force_b = candidate_conflict and pass_a_topic_conf < float(getattr(args, "topic_candidate_outside_force_passb_conf", 0.92))
+            candidate_ambiguous_force_b = candidate_ambiguous and pass_a_topic_conf < 0.97
             low_retrieval_force_b = bool(workflow_profile.force_pass_b_when_low_retrieval and retrieval_quality < float(workflow_profile.force_pass_b_retrieval_threshold))
-            ran_b = bool(ran_b_base or candidate_force_b or low_retrieval_force_b)
+            ran_b = bool(ran_b_base or candidate_force_b or candidate_ambiguous_force_b or low_retrieval_force_b)
             if candidate_force_b:
                 report["topicCandidates"]["passBTriggeredByCandidateConflict"] += 1
+            if candidate_ambiguous_force_b:
+                report["topicCandidates"]["passBTriggeredByAmbiguousCandidates"] += 1
 
             pass_b: Optional[Dict[str, Any]] = None
 
@@ -1556,27 +1590,10 @@ def process_questions(
         total=total_questions,
         message=f"Schreibe Ausgabe nach {args.output}.",
     )
-    abstraction_clusters = cluster_abstractions(
-        questions,
-        threshold=float(args.abstraction_cluster_similarity),
-    )
-    for idx, q in enumerate(questions, start=1):
-        qid = str(q.get("id") or "")
-        audit = q.get("aiAudit")
-        if not isinstance(audit, dict):
-            continue
-        audit.setdefault("clusters", {})
-        audit["clusters"]["abstractionClusterId"] = abstraction_clusters["questionToAbstractionCluster"].get(qid)
-        emit_progress(
-            event="abstraction_clustering_question_updated",
-            stage="clustering",
-            index=idx,
-            total=total_questions,
-            done=done,
-            skipped=skipped,
-            message=f"Abstraktions-Clustering {idx}/{total_questions}: Cluster für Frage {qid} aktualisiert.",
-        )
-
+    # Do not recompute abstraction clusters here: the postprocessing step above
+    # already assigned deterministic clusters and optional LLM refinement may have
+    # removed/merged cluster members. Re-running cluster_abstractions() at finalize
+    # would overwrite those refined IDs immediately before saving.
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
     emit_progress(

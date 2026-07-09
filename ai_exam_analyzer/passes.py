@@ -28,8 +28,10 @@ def run_pass_a(
     system = (
         "Du bist ein strenger Prüfungsfragen-Analyst und Klassifikator.\n"
         "Arbeitsablauf:\n"
-        "1) Nutze topicCandidates als priorisierte Vorauswahl und bilde topic_initial primär innerhalb dieser Kandidaten.\n"
-        "   - Nur bei starker fachlicher Evidenz darfst du außerhalb der Kandidaten entscheiden.\n"
+        "1) Nutze topicCandidates als priorisierte, deterministische Vorauswahl und bilde topic_initial primär innerhalb dieser Kandidaten.\n"
+        "   - Prüfe matchedTokens/relativeScore: hohe Scores sind Hinweise, aber keine Beweise.\n"
+        "   - Nur bei starker fachlicher Evidenz darfst du außerhalb der Kandidaten entscheiden; begründe das explizit.\n"
+        "   - Bei konkurrierenden nahen Kandidaten: entscheide nach konkretem abgefragtem Fakt, nicht nach Oberthema/Schlagwort.\n"
         "2) Nutze imageContext, imageClusterContext und knowledgeImageContext für die Bildzuordnung.\n"
         "   - Wenn Bild vorhanden ist: bewerte visuelle Hinweise zwingend mit.\n"
         "   - Falls knowledgeImageContext ähnliche Knowledge-Base-Bilder enthält, nutze deren Kontext aktiv.\n"
@@ -37,7 +39,7 @@ def run_pass_a(
         "   - Wenn retrievedEvidence leer oder schwach ist, setze confidence konservativ und markiere Wartungsbedarf.\n"
         "4) Vergleiche mit currentCorrectIndices und entscheide über recommendChange/proposedCorrectIndices.\n"
         "5) Markiere Wartungsbedarf (unklar, mehrdeutig, fehlendes Bild, etc.).\n"
-        "6) Bestimme topic_final und gib eine Ein-Satz-Abstraktion question_abstraction.summary aus.\n\n"
+        "6) Bestimme topic_final erst nach Antwort-/Evidenzprüfung und gib eine Ein-Satz-Abstraktion question_abstraction.summary aus.\n\n"
         "Regeln:\n"
         "- evidenceChunkIds muss genutzte Chunk-IDs aus retrievedEvidence referenzieren (oder []).\n"
         "- Nutze nur Evidenz, die fachlich direkt zur Frage passt; vermeide spekulative Schlüsse.\n"
@@ -82,7 +84,8 @@ def run_pass_b(
     system = (
         "Du bist ein unabhängiger Verifier.\n"
         "Du bekommst eine Prüfungsfrage + Pass A Ergebnis.\n"
-        "Prüfe mit retrievedEvidence + Bildkontext + Clusterkontext, ob die vorgeschlagene Korrektur fachlich stimmt.\n"
+        "Prüfe mit retrievedEvidence + Bildkontext + Clusterkontext, ob die vorgeschlagene Korrektur und topic_final fachlich stimmen.\n"
+        "Bewerte topicCandidates erneut: nahe Kandidaten müssen anhand des konkreten Prüfungsfakts gegeneinander abgegrenzt werden.\n"
         "Bei schwacher/fehlender Evidenz: konservativ bleiben und cannotJudge erwägen.\n"
         "Berücksichtige Bildähnlichkeits-Hinweise aus knowledgeImageContext zwingend.\n"
         "Wenn Bild fehlt oder Fall unentscheidbar: cannotJudge=true und Wartungsbedarf markieren.\n"
@@ -228,12 +231,17 @@ def run_abstraction_cluster_refinement(
     model: str,
 ) -> Dict[str, Any]:
     system = (
-        "Du bist ein Clustering-Reviewer für Prüfungsfragen-Abstraktionen.\n"
+        "Du bist ein sehr strenger Clustering-Reviewer für Prüfungsfragen.\n"
+        "Ziel ist NICHT sprachliche/strukturelle Ähnlichkeit, sondern gleicher abstrahierter Prüfungsinhalt.\n"
+        "Fragen gehören nur zusammen, wenn sie im Kern dasselbe Lernziel bzw. dieselbe fachliche Aussage abprüfen "
+        "und eine gemeinsame Musterlösung/Erklärung plausibel wäre.\n"
+        "Ignoriere MC-Formulierungen wie 'Welche Aussage trifft zu?', Antwortanzahl, Negationsstruktur oder ähnliche Satzschablonen.\n"
         "Ziele:\n"
-        "1) Erkenne thematische Ausreißer im Source-Cluster und gib deren questionIds in removeQuestionIds zurück.\n"
-        "2) Prüfe, ob der bereinigte Source-Cluster inhaltlich mit genau einem Kandidaten-Cluster gemergt werden sollte.\n"
-        "3) Wenn kein sinnvoller Merge: mergeIntoClusterId leerer String ''.\n"
-        "4) Sei konservativ: bei Unsicherheit keine Entfernung/kein Merge.\n"
+        "1) Entferne aus dem Source-Cluster alle Fragen, die nur dasselbe Oberthema, aber einen anderen konkreten Inhalt abfragen.\n"
+        "2) Behalte Varianten/Paraphrasen zusammen, wenn Entitäten, Relation und abgefragter Fakt gleich sind.\n"
+        "3) Prüfe, ob der bereinigte Source-Cluster mit genau einem Kandidaten-Cluster denselben Inhalt abfragt.\n"
+        "4) Wenn kein fachlich enger Merge sinnvoll ist: mergeIntoClusterId leerer String ''.\n"
+        "5) Sei konservativ: bei Unsicherheit keine Entfernung/kein Merge; begründe kurz fachlich.\n"
         "Antworte strikt im JSON-Schema."
     )
     user = [{"type": "input_text", "text": json.dumps(payload, ensure_ascii=False)}]
