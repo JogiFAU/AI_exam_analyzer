@@ -270,7 +270,19 @@ def _apply_llm_abstraction_cluster_refinement(
         cid_s = str(cid)
         topic_key = ((audit.get("topicFinal") or {}).get("topicKey") or (audit.get("topicInitial") or {}).get("topicKey") or "")
         summary = (((audit.get("questionAbstraction") or {}).get("summary") or "").strip() or (q.get("questionText") or "")[:220])
-        cluster_to_items.setdefault(cid_s, []).append({"questionId": qid, "summary": summary, "topicKey": str(topic_key)})
+        answers = []
+        for answer in (q.get("answers") or [])[:6]:
+            answers.append({
+                "text": str(answer.get("text") or "")[:220],
+                "isCorrect": bool(answer.get("isCorrect", False)),
+            })
+        cluster_to_items.setdefault(cid_s, []).append({
+            "questionId": qid,
+            "summary": summary,
+            "topicKey": str(topic_key),
+            "questionText": str(q.get("questionText") or "")[:320],
+            "answers": answers,
+        })
 
     min_size = max(2, int(getattr(args, "cluster_refinement_min_cluster_size", 2) or 2))
     max_clusters = max(1, int(getattr(args, "cluster_refinement_max_clusters", 30) or 30))
@@ -345,10 +357,18 @@ def _apply_llm_abstraction_cluster_refinement(
             clusters["abstractionClusterId"] = next_cluster_id
             audit["clusters"] = clusters
             q["aiAudit"] = audit
+            answers = []
+            for answer in (q.get("answers") or [])[:6]:
+                answers.append({
+                    "text": str(answer.get("text") or "")[:220],
+                    "isCorrect": bool(answer.get("isCorrect", False)),
+                })
             cluster_to_items.setdefault(str(next_cluster_id), []).append({
                 "questionId": qid,
                 "summary": (((audit.get("questionAbstraction") or {}).get("summary") or "").strip() or (q.get("questionText") or "")[:220]),
                 "topicKey": str(((audit.get("topicFinal") or {}).get("topicKey") or "")),
+                "questionText": str(q.get("questionText") or "")[:320],
+                "answers": answers,
             })
             next_cluster_id += 1
 

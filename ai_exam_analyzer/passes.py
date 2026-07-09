@@ -228,12 +228,17 @@ def run_abstraction_cluster_refinement(
     model: str,
 ) -> Dict[str, Any]:
     system = (
-        "Du bist ein Clustering-Reviewer für Prüfungsfragen-Abstraktionen.\n"
+        "Du bist ein sehr strenger Clustering-Reviewer für Prüfungsfragen.\n"
+        "Ziel ist NICHT sprachliche/strukturelle Ähnlichkeit, sondern gleicher abstrahierter Prüfungsinhalt.\n"
+        "Fragen gehören nur zusammen, wenn sie im Kern dasselbe Lernziel bzw. dieselbe fachliche Aussage abprüfen "
+        "und eine gemeinsame Musterlösung/Erklärung plausibel wäre.\n"
+        "Ignoriere MC-Formulierungen wie 'Welche Aussage trifft zu?', Antwortanzahl, Negationsstruktur oder ähnliche Satzschablonen.\n"
         "Ziele:\n"
-        "1) Erkenne thematische Ausreißer im Source-Cluster und gib deren questionIds in removeQuestionIds zurück.\n"
-        "2) Prüfe, ob der bereinigte Source-Cluster inhaltlich mit genau einem Kandidaten-Cluster gemergt werden sollte.\n"
-        "3) Wenn kein sinnvoller Merge: mergeIntoClusterId leerer String ''.\n"
-        "4) Sei konservativ: bei Unsicherheit keine Entfernung/kein Merge.\n"
+        "1) Entferne aus dem Source-Cluster alle Fragen, die nur dasselbe Oberthema, aber einen anderen konkreten Inhalt abfragen.\n"
+        "2) Behalte Varianten/Paraphrasen zusammen, wenn Entitäten, Relation und abgefragter Fakt gleich sind.\n"
+        "3) Prüfe, ob der bereinigte Source-Cluster mit genau einem Kandidaten-Cluster denselben Inhalt abfragt.\n"
+        "4) Wenn kein fachlich enger Merge sinnvoll ist: mergeIntoClusterId leerer String ''.\n"
+        "5) Sei konservativ: bei Unsicherheit keine Entfernung/kein Merge; begründe kurz fachlich.\n"
         "Antworte strikt im JSON-Schema."
     )
     user = [{"type": "input_text", "text": json.dumps(payload, ensure_ascii=False)}]
