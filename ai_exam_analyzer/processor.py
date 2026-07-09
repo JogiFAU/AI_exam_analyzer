@@ -1588,27 +1588,10 @@ def process_questions(
         total=total_questions,
         message=f"Schreibe Ausgabe nach {args.output}.",
     )
-    abstraction_clusters = cluster_abstractions(
-        questions,
-        threshold=float(args.abstraction_cluster_similarity),
-    )
-    for idx, q in enumerate(questions, start=1):
-        qid = str(q.get("id") or "")
-        audit = q.get("aiAudit")
-        if not isinstance(audit, dict):
-            continue
-        audit.setdefault("clusters", {})
-        audit["clusters"]["abstractionClusterId"] = abstraction_clusters["questionToAbstractionCluster"].get(qid)
-        emit_progress(
-            event="abstraction_clustering_question_updated",
-            stage="clustering",
-            index=idx,
-            total=total_questions,
-            done=done,
-            skipped=skipped,
-            message=f"Abstraktions-Clustering {idx}/{total_questions}: Cluster für Frage {qid} aktualisiert.",
-        )
-
+    # Do not recompute abstraction clusters here: the postprocessing step above
+    # already assigned deterministic clusters and optional LLM refinement may have
+    # removed/merged cluster members. Re-running cluster_abstractions() at finalize
+    # would overwrite those refined IDs immediately before saving.
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
     emit_progress(
