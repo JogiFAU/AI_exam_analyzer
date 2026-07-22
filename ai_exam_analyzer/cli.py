@@ -6,7 +6,7 @@ import os
 from ai_exam_analyzer.config import CONFIG
 from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.io_utils import load_json
-from ai_exam_analyzer.model_profiles import apply_model_optimized_defaults
+from ai_exam_analyzer.model_profiles import QUALITY_PROFILE_OPTIONS, apply_model_optimized_defaults
 from ai_exam_analyzer.knowledge_base import (
     build_knowledge_base_from_zip,
     load_index_json,
@@ -42,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     ap.add_argument("--llm-provider", default=CONFIG["LLM_PROVIDER"], choices=["openai", "gemini"],
                     help="LLM provider for all passes")
+    ap.add_argument("--quality-cost-profile", default=CONFIG["QUALITY_COST_PROFILE"], choices=QUALITY_PROFILE_OPTIONS,
+                    help="Workflow priority: highest_quality, quality, cost_optimized, or fully_cost_optimized")
     ap.add_argument("--passA-model", default=CONFIG["PASSA_MODEL"])
     ap.add_argument("--passB-model", default=CONFIG["PASSB_MODEL"])
     ap.add_argument("--passA-temperature", type=float, default=CONFIG["PASSA_TEMPERATURE"])

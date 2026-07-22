@@ -9,7 +9,12 @@ import streamlit as st
 from ai_exam_analyzer.config import CONFIG
 from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.io_utils import load_json
-from ai_exam_analyzer.model_profiles import apply_model_optimized_defaults, derive_workflow_budget
+from ai_exam_analyzer.model_profiles import (
+    QUALITY_PROFILE_LABELS,
+    QUALITY_PROFILE_OPTIONS,
+    apply_model_optimized_defaults,
+    get_quality_cost_profile,
+)
 from ai_exam_analyzer.knowledge_base import (
     build_knowledge_base_from_zip,
     load_index_json,
@@ -414,25 +419,35 @@ def _build_args() -> SimpleNamespace:
                 value=api_key_value,
                 help="API-Key für den Zugriff auf die gewählten Modelle.",
             )
-            default_pass_a_model = CONFIG["PASSA_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSA_MODEL"]
-            default_pass_b_model = CONFIG["PASSB_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSB_MODEL"]
-            default_review_model = CONFIG["REVIEW_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["REVIEW_MODEL"]
-            default_reconstruction_model = CONFIG["RECONSTRUCTION_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["RECONSTRUCTION_MODEL"]
-            default_explainer_model = CONFIG["EXPLAINER_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["EXPLAINER_MODEL"]
-            provider_defaults = _provider_ui_defaults(llm_provider)
-            kb_budget_defaults = derive_workflow_budget(
-                provider=llm_provider,
-                pass_a_model=default_pass_a_model,
-                pass_b_model=default_pass_b_model,
-                default_top_k=int(CONFIG["KNOWLEDGE_TOP_K"]),
-                default_max_chars=int(CONFIG["KNOWLEDGE_MAX_CHARS"]),
-                default_min_score=float(CONFIG["KNOWLEDGE_MIN_SCORE"]),
+            profile_default = str(CONFIG.get("QUALITY_COST_PROFILE", "quality"))
+            profile_default_index = QUALITY_PROFILE_OPTIONS.index(profile_default) if profile_default in QUALITY_PROFILE_OPTIONS else 1
+            quality_cost_profile = st.selectbox(
+                "Priorität",
+                options=QUALITY_PROFILE_OPTIONS,
+                index=profile_default_index,
+                format_func=lambda value: QUALITY_PROFILE_LABELS.get(value, value),
+                help="Wählt ein abgestimmtes Set aus Modellen, Reasoning-Aufwand, Confidence-Schwellen und Knowledge-Budget. Modelle werden nicht mehr manuell ausgewählt.",
             )
-            default_pass_a_model = CONFIG["PASSA_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSA_MODEL"]
-            default_pass_b_model = CONFIG["PASSB_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSB_MODEL"]
-            default_review_model = CONFIG["REVIEW_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["REVIEW_MODEL"]
-            default_reconstruction_model = CONFIG["RECONSTRUCTION_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["RECONSTRUCTION_MODEL"]
-            default_explainer_model = CONFIG["EXPLAINER_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["EXPLAINER_MODEL"]
+            selected_profile = get_quality_cost_profile(provider=llm_provider, profile=quality_cost_profile)
+            default_pass_a_model = selected_profile.pass_a_model
+            default_pass_b_model = selected_profile.pass_b_model
+            default_review_model = selected_profile.review_model
+            default_reconstruction_model = selected_profile.reconstruction_model
+            default_explainer_model = selected_profile.explainer_model
+            provider_defaults = {
+                "pass_a_temperature": selected_profile.pass_a_temperature,
+                "pass_b_reasoning_effort": selected_profile.pass_b_reasoning_effort,
+                "trigger_answer_conf": selected_profile.trigger_answer_conf,
+                "trigger_topic_conf": selected_profile.trigger_topic_conf,
+                "apply_change_min_conf_b": selected_profile.apply_change_min_conf_b,
+                "low_conf_maintenance_threshold": selected_profile.low_conf_maintenance_threshold,
+            }
+            kb_budget_defaults = selected_profile
+            st.caption(
+                f"Aktives Set: Pass A `{default_pass_a_model}`, Pass B `{default_pass_b_model}`, "
+                f"Review/Reconstruction `{default_reconstruction_model}`. "
+                "Für Feinsteuerung später kann diese Auswahl erweitert werden."
+            )
         auto_dataset_tuning = bool(is_tuning_only)
 
         with st.expander("⚙️ Pipeline", expanded=False):
@@ -462,16 +477,12 @@ def _build_args() -> SimpleNamespace:
 
             enable_review_pass = st.checkbox(
                 "Pass C (Deep Review) aktivieren",
-                value=(False if is_explainer_only else bool(CONFIG["ENABLE_REVIEW_PASS"])),
-                help="Optionaler dritter Review-Pass für wartungsintensive Fragen.",
+                value=(False if is_explainer_only else bool(selected_profile.enable_review_pass)),
+                help="Optionaler dritter Review-Pass für wartungsintensive Fragen (durch Prioritätsprofil vorgegeben).",
+                disabled=True,
             )
-            review_model = st.text_input(
-                "Pass C Modell",
-                value=default_review_model,
-                key=f"{llm_provider}_review_model",
-                help="Modell für den optionalen Deep-Review-Pass.",
-                disabled=not enable_review_pass,
-            )
+            review_model = str(default_review_model)
+            st.caption(f"Pass C Modell: `{review_model}`")
             review_min_maintenance_severity = st.select_slider(
                 "Pass C ab Wartungs-Severity",
                 options=[1, 2, 3],
@@ -482,15 +493,12 @@ def _build_args() -> SimpleNamespace:
 
             enable_reconstruction_pass = st.checkbox(
                 "Reconstruction-Pass aktivieren",
-                value=(False if is_explainer_only else bool(CONFIG["ENABLE_RECONSTRUCTION_PASS"])),
-                help="Führt eine Rekonstruktions-/Altfrage-Bewertung pro Frage aus und annotiert das Ergebnis.",
+                value=(False if is_explainer_only else bool(selected_profile.enable_reconstruction_pass)),
+                help="Führt eine Rekonstruktions-/Altfrage-Bewertung pro Frage aus und annotiert das Ergebnis (durch Prioritätsprofil vorgegeben).",
+                disabled=True,
             )
-            reconstruction_model = st.text_input(
-                "Reconstruction Modell",
-                value=str(default_reconstruction_model),
-                key=f"{llm_provider}_reconstruction_model",
-                disabled=not enable_reconstruction_pass,
-            )
+            reconstruction_model = str(default_reconstruction_model)
+            st.caption(f"Reconstruction Modell: `{reconstruction_model}`")
 
             force_rerun_review = False
             force_rerun_reconstruction = False
@@ -518,13 +526,8 @@ def _build_args() -> SimpleNamespace:
                     value=is_explainer_only,
                     disabled=not enable_explainer_pass,
                 )
-                explainer_model = st.text_input(
-                    "Explainer Modell",
-                    value=str(default_explainer_model),
-                    key=f"{llm_provider}_postprocess_explainer_model",
-                    disabled=not enable_explainer_pass,
-                    help="Standard ist GPT-5.5 (OpenAI) bzw. Gemini 3.5 Flash (Gemini) für bessere didaktische Erklärungen und strukturierte Ausgabe.",
-                )
+                explainer_model = str(default_explainer_model)
+                st.caption(f"Explainer Modell: `{explainer_model}`")
                 st.caption("Nicht relevant in diesem Modus: Resume, Pass A/B, Repeat-Reconstruction, Sleep/Limit.")
                 resume = False
                 limit = 0
@@ -557,8 +560,10 @@ def _build_args() -> SimpleNamespace:
                     step=0.05,
                     help="Kurze Pause zwischen zwei API-Aufrufen.",
                 )
-                pass_a_model = st.text_input("Pass A Modell", value=default_pass_a_model, key=f"{llm_provider}_pass_a_model", help="Modell für Erstbewertung.")
-                pass_b_model = st.text_input("Pass B Modell", value=default_pass_b_model, key=f"{llm_provider}_pass_b_model", help="Modell für Verifikation/Review.")
+                pass_a_model = str(default_pass_a_model)
+                pass_b_model = str(default_pass_b_model)
+                st.caption(f"Pass A Modell: `{pass_a_model}`")
+                st.caption(f"Pass B Modell: `{pass_b_model}`")
                 pass_a_temperature = st.number_input(
                     "Pass A Temperature",
                     min_value=0.0,
@@ -566,19 +571,19 @@ def _build_args() -> SimpleNamespace:
                     value=float(provider_defaults["pass_a_temperature"]),
                     step=0.1,
                     help="Sampling-Temperatur für Pass A.",
-                    disabled=auto_dataset_tuning,
+                    disabled=True,
                 )
                 pass_b_reasoning_effort = st.selectbox(
                     "Pass B Reasoning Effort",
                     options=["low", "medium", "high", "xhigh"],
                     index=["low", "medium", "high", "xhigh"].index(str(provider_defaults["pass_b_reasoning_effort"])),
                     help="Rechenaufwand für Pass B.",
-                    disabled=auto_dataset_tuning,
+                    disabled=True,
                 )
-                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf")
-                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf")
-                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b")
-                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold")
+                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf", disabled=True)
+                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf", disabled=True)
+                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b", disabled=True)
+                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold", disabled=True)
 
                 enable_repeat_reconstruction = st.checkbox(
                     "Repeat-Reconstruction aktivieren",
@@ -601,12 +606,8 @@ def _build_args() -> SimpleNamespace:
                     value=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
                     help="Erzeugt eine didaktische Erklärung pro Frage im Audit.",
                 )
-                explainer_model = st.text_input(
-                    "Explainer Modell",
-                    value=str(default_explainer_model),
-                    key=f"{llm_provider}_explainer_model",
-                    disabled=(not enable_explainer_pass),
-                )
+                explainer_model = str(default_explainer_model)
+                st.caption(f"Explainer Modell: `{explainer_model}`")
 
                 write_top_level = st.checkbox(
                     "Top-Level ai* Felder schreiben",
@@ -633,8 +634,8 @@ def _build_args() -> SimpleNamespace:
                 min_value=1,
                 value=int(kb_budget_defaults.knowledge_top_k),
                 key=f"{llm_provider}_knowledge_top_k",
-                help="Anzahl der Beleg-Chunks pro Frage.",
-                
+                help="Anzahl der Beleg-Chunks pro Frage (durch Prioritätsprofil vorgegeben).",
+                disabled=True,
             )
             knowledge_max_chars = st.number_input(
                 "Knowledge Max Chars",
@@ -642,8 +643,8 @@ def _build_args() -> SimpleNamespace:
                 value=int(kb_budget_defaults.knowledge_max_chars),
                 key=f"{llm_provider}_knowledge_max_chars",
                 step=100,
-                help="Maximale Gesamtlänge der übergebenen Belege.",
-                
+                help="Maximale Gesamtlänge der übergebenen Belege (durch Prioritätsprofil vorgegeben).",
+                disabled=True,
             )
             knowledge_min_score = st.slider(
                 "Knowledge Min Score",
@@ -653,7 +654,7 @@ def _build_args() -> SimpleNamespace:
                 0.01,
                 help="Mindestrelevanz eines Chunks.",
                 key=f"{llm_provider}_knowledge_min_score",
-                
+                disabled=True,
             )
             knowledge_chunk_chars = st.number_input(
                 "Knowledge Chunk Chars",
@@ -675,6 +676,7 @@ def _build_args() -> SimpleNamespace:
         output=(output_path or _derive_output_path_from_input(input_path, output_folder)),
         api_key=api_key,
         llm_provider=llm_provider,
+        quality_cost_profile=quality_cost_profile,
         resume=resume,
         limit=int(limit),
         checkpoint_every=int(checkpoint_every),
@@ -820,6 +822,7 @@ def main() -> None:
                 for key, value in loaded_cfg.items():
                     if hasattr(args, key):
                         setattr(args, key, value)
+                apply_model_optimized_defaults(args)
 
         auto_report: Optional[str] = None
         if bool(getattr(args, "tuning_only", False)) and not bool(getattr(args, "postprocess_only", False)):
@@ -848,6 +851,7 @@ def main() -> None:
             for key, value in recommendations.items():
                 if hasattr(args, key):
                     setattr(args, key, value)
+            apply_model_optimized_defaults(args)
 
             provider_prefix = str(args.llm_provider)
             state_map = {
@@ -873,6 +877,7 @@ def main() -> None:
                 "llm_provider": args.llm_provider,
                 "created_from_input": args.input,
                 "settings": {
+                    "quality_cost_profile": args.quality_cost_profile,
                     "trigger_answer_conf": float(args.trigger_answer_conf),
                     "trigger_topic_conf": float(args.trigger_topic_conf),
                     "apply_change_min_conf_b": float(args.apply_change_min_conf_b),
