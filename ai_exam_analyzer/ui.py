@@ -1074,6 +1074,22 @@ def main() -> None:
     status_text = st.empty()
     metrics = st.empty()
     event_log = st.empty()
+    init_events: List[str] = []
+
+    def show_live_step(stage: str, message: str, *, progress: float = 0.0, detail: str = "") -> None:
+        progress_bar.progress(min(1.0, max(0.0, float(progress))))
+        status_text.markdown(f"**[{stage}]** {message}")
+        cols = metrics.columns(5)
+        cols[0].metric("Verarbeitet", "0/—")
+        cols[1].metric("Abgeschlossen", "0")
+        cols[2].metric("Übersprungen", "0")
+        cols[3].metric("Phase", stage)
+        cols[4].metric("Kosten kumulativ", "$0.0000")
+        suffix = f" — {detail}" if detail else ""
+        init_events.append(f"- [{stage}/init] {message}{suffix}")
+        if len(init_events) > 20:
+            del init_events[0]
+        event_log.markdown("**Live-Log (neueste unten)**\n" + "\n".join(init_events))
 
     if not start_button:
         st.info(f"Setze deine Einstellungen und klicke auf **{start_label}**.")
@@ -1087,11 +1103,14 @@ def main() -> None:
     os.environ[env_name] = args.api_key
 
     try:
+        show_live_step("initialisierung", "Lade Topic-Tree …", progress=0.03, detail=args.topics)
         topic_tree = load_json(args.topics)
+        show_live_step("initialisierung", "Baue Topic-Katalog …", progress=0.07)
         catalog, key_map = build_topic_catalog(topic_tree)
         topic_keys = [row["topicKey"] for row in catalog]
         topic_catalog_text = format_topic_catalog_for_prompt(catalog)
 
+        show_live_step("initialisierung", f"Erzeuge JSON-Schemas für {len(topic_keys)} Topic-Keys …", progress=0.11)
         schema_a = schema_pass_a(topic_keys)
         schema_b = schema_pass_b(topic_keys)
         schema_review = schema_review_pass(topic_keys)
@@ -1099,6 +1118,7 @@ def main() -> None:
         schema_explainer = schema_explainer_pass()
         schema_cluster_refinement = schema_abstraction_cluster_refinement()
 
+        show_live_step("initialisierung", "Lade Input-Datensatz …", progress=0.16, detail=args.input)
         data = load_json(args.input)
         if isinstance(data, dict) and "questions" in data:
             questions = data["questions"]
@@ -1109,13 +1129,24 @@ def main() -> None:
         else:
             raise ValueError("Input muss Liste oder Objekt mit 'questions' sein.")
 
+        show_live_step("initialisierung", f"Datensatz geladen ({len(questions)} Fragen).", progress=0.22)
+        if args.cleanup_spec:
+            show_live_step("initialisierung", "Lade Cleanup-Spezifikation …", progress=0.25, detail=args.cleanup_spec)
         cleanup_spec = load_json(args.cleanup_spec) if args.cleanup_spec else None
+        if args.images_zip:
+            show_live_step("initialisierung", "Bereite Fragenbilder vor …", progress=0.30, detail=args.images_zip)
         image_store = _prepare_image_store(args)
+        if args.knowledge_zip or args.knowledge_index:
+            show_live_step("knowledge", "Lade/baue Knowledge Base …", progress=0.36, detail=args.knowledge_index or args.knowledge_zip)
+        else:
+            show_live_step("knowledge", "Knowledge Base deaktiviert/übersprungen.", progress=0.36)
         knowledge_base = _prepare_knowledge_base(args, topic_tree)
+        kb_chunks = len(getattr(knowledge_base, "chunks", []) or []) if knowledge_base is not None else 0
+        show_live_step("initialisierung", f"Initialisierung abgeschlossen (Knowledge-Chunks: {kb_chunks}).", progress=0.42)
 
         auto_report: Optional[str] = None
         if bool(getattr(args, "tuning_only", False)) and not bool(getattr(args, "postprocess_only", False)):
-            status_text.markdown("**[autotune]** Analysiere Datensatz und ermittle passende Parameter …")
+            show_live_step("autotune", "Analysiere Datensatzprofil, Retrieval-Qualität und Beispiel-Fragen …", progress=0.50)
             current_settings = {
                 "trigger_answer_conf": float(args.trigger_answer_conf),
                 "trigger_topic_conf": float(args.trigger_topic_conf),
@@ -1128,6 +1159,7 @@ def main() -> None:
                 "enable_reconstruction_pass": bool(args.enable_reconstruction_pass),
                 "enable_repeat_reconstruction": bool(args.enable_repeat_reconstruction),
             }
+            show_live_step("autotune", "Frage Modell nach robusten Parametern und Kostenabschätzung …", progress=0.62, detail=args.passB_model or args.passA_model)
             recommendations, auto_report, cost_estimate = recommend_settings(
                 provider=args.llm_provider,
                 api_key=args.api_key,
@@ -1144,6 +1176,7 @@ def main() -> None:
                     "explainer": args.explainer_model,
                 },
             )
+            show_live_step("autotune", f"Empfehlungen erhalten ({len(recommendations)} Parameter).", progress=0.82)
             for key, value in recommendations.items():
                 if hasattr(args, key):
                     setattr(args, key, value)
@@ -1171,8 +1204,10 @@ def main() -> None:
                 "cost_estimate": cost_estimate,
             }
             target_cfg = args.save_tuning_config_path or _resolve_path(folder=os.path.dirname(args.input), filename="analysis_config.json")
+            show_live_step("autotune", "Speichere Parameter-Konfiguration …", progress=0.92, detail=target_cfg)
             from ai_exam_analyzer.io_utils import save_json
             save_json(target_cfg, tuning_payload)
+            show_live_step("autotune", "Parameter-Einstellung abgeschlossen.", progress=1.0, detail=target_cfg)
             st.success(f"Parameter-Einstellung abgeschlossen. Konfig gespeichert: {target_cfg}")
             st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
             cost_total = (cost_estimate.get("total") or {})
@@ -1180,7 +1215,8 @@ def main() -> None:
             st.json(cost_estimate)
             return
 
-        recent_events: List[str] = []
+        show_live_step("pipeline", "Starte Analyse-Workflow …", progress=0.45)
+        recent_events: List[str] = list(init_events[-8:])
 
         def on_progress(event: Dict[str, Any]) -> None:
             total = max(1, int(event.get("total") or len(questions) or 1))
