@@ -105,6 +105,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Run Pass B when the second deterministic topic candidate is this close to the first")
     ap.add_argument("--run-report", default=CONFIG["RUN_REPORT_PATH"],
                     help="Optional JSON path for workflow run metrics/report")
+    ap.add_argument("--cost-report", default=CONFIG["COST_REPORT_PATH"],
+                    help="Optional JSON path for detailed per-question/per-step token and cost records (default: <output>.costs.json)")
     ap.add_argument("--topic-candidate-outside-force-passb-conf", type=float,
                     default=CONFIG["TOPIC_CANDIDATE_OUTSIDE_FORCE_PASSB_CONF"],
                     help="Run Pass B when Pass A picks topic outside candidates below this confidence")

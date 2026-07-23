@@ -103,6 +103,14 @@ class GeminiResponsesAdapter:
                 parsed = json.loads(_extract_json_object(text))
                 if not isinstance(parsed, dict):
                     raise RuntimeError(f"Gemini structured output must decode to object, got {type(parsed).__name__}.")
+                usage = getattr(resp, "usage_metadata", None)
+                if usage is not None:
+                    usage_dict = usage.model_dump() if hasattr(usage, "model_dump") else (usage if isinstance(usage, dict) else {})
+                    parsed["_llm_usage"] = {
+                        "input_tokens": usage_dict.get("prompt_token_count") or usage_dict.get("input_tokens") or 0,
+                        "output_tokens": usage_dict.get("candidates_token_count") or usage_dict.get("output_tokens") or 0,
+                        "total_tokens": usage_dict.get("total_token_count") or usage_dict.get("total_tokens") or 0,
+                    }
                 return parsed
             except Exception as exc:
                 last_error = exc

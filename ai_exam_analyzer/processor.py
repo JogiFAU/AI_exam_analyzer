@@ -1,5 +1,6 @@
 """Core processing loop for question annotation."""
 
+import os
 import time
 from typing import Any, Callable, Dict, List, Optional, Set
 
@@ -25,6 +26,7 @@ from ai_exam_analyzer.topic_candidates import TopicCandidateIndex
 from ai_exam_analyzer.repeat_reconstruction import compute_repeat_reconstruction
 from ai_exam_analyzer.llm_clients import build_llm_client
 from ai_exam_analyzer.workflow_profiles import build_workflow_profile
+from ai_exam_analyzer.cost_tracking import add_records, format_eur, make_cost_record
 
 
 def _answer_external_indices(q: Dict[str, Any]) -> List[int]:
@@ -103,6 +105,49 @@ def _build_output_obj(
 
 
 
+def _remove_costs_from_question_audits(questions: List[Dict[str, Any]]) -> None:
+    for q in questions:
+        audit = q.get("aiAudit")
+        if isinstance(audit, dict):
+            audit.pop("costs", None)
+
+
+def _derive_cost_report_path(args: Any) -> str:
+    requested = str(getattr(args, "cost_report", "") or "").strip()
+    if requested:
+        return requested
+    output = str(getattr(args, "output", "") or "").strip()
+    if not output:
+        return ""
+    root, ext = os.path.splitext(output)
+    return f"{root or output}.costs.json" if ext else f"{output}.costs.json"
+
+
+def _build_cost_report_payload(*, records: List[Dict[str, Any]], args: Any, total_questions: int, processed: int, done: int, skipped: int) -> Dict[str, Any]:
+    summary = add_records(records)
+    return {
+        "schemaVersion": 1,
+        "provider": str(getattr(args, "llm_provider", "") or ""),
+        "input": str(getattr(args, "input", "") or ""),
+        "output": str(getattr(args, "output", "") or ""),
+        "totalQuestions": int(total_questions),
+        "processed": int(processed),
+        "done": int(done),
+        "skipped": int(skipped),
+        "currency": "EUR",
+        "summary": summary.get("total") or {},
+        "byStage": summary.get("byStage") or {},
+        "records": list(records),
+    }
+
+
+def _save_cost_report_if_configured(*, args: Any, records: List[Dict[str, Any]], total_questions: int, processed: int, done: int, skipped: int) -> str:
+    path = _derive_cost_report_path(args)
+    if not path:
+        return ""
+    payload = _build_cost_report_payload(records=records, args=args, total_questions=total_questions, processed=processed, done=done, skipped=skipped)
+    save_json(path, payload)
+    return path
 
 
 def _retrieve_evidence_with_profile(
@@ -310,6 +355,7 @@ def _apply_llm_abstraction_cluster_refinement(
     questions: List[Dict[str, Any]],
     schema_cluster_refinement: Dict[str, Any],
     emit_progress: Callable[..., None],
+    cost_callback: Optional[Callable[[str, str, Optional[Dict[str, Any]], Optional[Dict[str, Any]], Optional[int]], None]] = None,
 ) -> None:
     if not bool(getattr(args, "enable_llm_abstraction_cluster_refinement", False)):
         return
@@ -411,6 +457,9 @@ def _apply_llm_abstraction_cluster_refinement(
                 message=f"LLM-Cluster-Refinement Fehler für Cluster {source_cid}: {exc}",
             )
             continue
+
+        if cost_callback is not None:
+            cost_callback("abstraction_cluster_refinement", refinement_model, decision, None, idx)
 
         source_question_ids = [str(r["questionId"]) for r in source_rows]
         remove_ids = [str(x) for x in (decision.get("removeQuestionIds") or []) if str(x) in set(source_question_ids)]
@@ -526,6 +575,38 @@ def process_questions(
 
     catalog_rows = topic_catalog or sorted(key_map.values(), key=lambda x: (x.get("superTopicId", 0), x.get("subtopicId", 0)))
     topic_candidate_index = TopicCandidateIndex(catalog_rows) if catalog_rows else None
+
+    cost_records: List[Dict[str, Any]] = []
+
+    cost_sequence = 0
+
+    def record_cost(stage: str, model: str, result: Optional[Dict[str, Any]], question: Optional[Dict[str, Any]] = None, question_index: Optional[int] = None) -> Dict[str, Any]:
+        nonlocal cost_sequence
+        usage = (result or {}).pop("_llm_usage", None) if isinstance(result, dict) else None
+        record = make_cost_record(stage=stage, model=model, usage=usage)
+        cost_sequence += 1
+        record["sequence"] = cost_sequence
+        if question is not None:
+            record["questionId"] = str(question.get("id") or question.get("questionId") or "")
+        if question_index is not None:
+            record["questionIndex"] = int(question_index)
+        cost_records.append(record)
+        return record
+
+    def emit_cost_progress(stage: str, model: str, result: Optional[Dict[str, Any]], question: Optional[Dict[str, Any]] = None, question_index: Optional[int] = None) -> None:
+        record = record_cost(stage, model, result, question, question_index)
+        summary = add_records(cost_records)
+        emit_progress(
+            event="cost_updated",
+            stage=stage,
+            cost_stage_eur=record["costEur"],
+            cost_total_eur=(summary.get("total") or {}).get("costEur", 0.0),
+            cost_stage_formatted=record.get("costFormatted") or format_eur(record.get("costEur") or 0.0),
+            cost_total_formatted=(summary.get("total") or {}).get("costFormatted") or format_eur((summary.get("total") or {}).get("costEur") or 0.0),
+            input_tokens=record["inputTokens"],
+            output_tokens=record["outputTokens"],
+            message=f"Kosten aktualisiert: {stage} {record.get('costFormatted') or format_eur(record.get('costEur') or 0.0)} (kumulativ {(summary.get('total') or {}).get('costFormatted') or format_eur((summary.get('total') or {}).get('costEur') or 0.0)}).",
+        )
 
     report: Dict[str, Any] = {
         "totalQuestions": total_questions,
@@ -784,6 +865,7 @@ def process_questions(
                 processed += 1
                 emit_progress(event="question_finished", index=i, total=total_questions, processed=processed, done=done, skipped=skipped, status=audit.get("status"), message=f"Frage {i}/{total_questions} abgeschlossen (preprocessing skip).")
                 if args.checkpoint_every and processed % args.checkpoint_every == 0:
+                    _remove_costs_from_question_audits(questions)
                     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
                     save_json(args.output, out_obj)
                 time.sleep(args.sleep)
@@ -809,6 +891,7 @@ def process_questions(
                 temperature=args.passA_temperature,
                 question_images=question_images,
             )
+            emit_cost_progress("pass_a", args.passA_model, pass_a, q, i)
             emit_progress(
                 event="pass_a_finished",
                 stage="pass_a",
@@ -900,6 +983,7 @@ def process_questions(
                         reasoning_effort=args.passB_reasoning_effort,
                         question_images=question_images,
                     )
+                    emit_cost_progress("pass_b", args.passB_model, pass_b, q, i)
                     audit["models"]["passB"] = args.passB_model
                     report["passes"]["passBRan"] += 1
 
@@ -992,6 +1076,7 @@ def process_questions(
                         skipped=skipped,
                         message=f"Frage {i}/{total_questions}: Pass B Fehler – {e}",
                     )
+                    emit_cost_progress("pass_b", args.passB_model, pass_b, q, i)
                     audit["models"]["passB"] = args.passB_model
                     report["passes"]["passBRan"] += 1
                     verification = {"ran": True, "model": args.passB_model, "error": str(e)}
@@ -1109,6 +1194,7 @@ def process_questions(
                 pass_a_topic_key=pass_a["topic_initial"]["topicKey"],
                 final_topic_key=final_topic_key,
             ):
+                review: Optional[Dict[str, Any]] = None
                 try:
                     emit_progress(
                         event="review_started",
@@ -1128,6 +1214,8 @@ def process_questions(
                         model=args.review_model,
                         question_images=question_images,
                     )
+                    if review is not None:
+                        emit_cost_progress("review", args.review_model, review, q, i)
                     audit["models"]["review"] = args.review_model
                     report["passes"]["reviewRan"] += 1
                     review_indices = normalize_indices(
@@ -1171,6 +1259,8 @@ def process_questions(
                         skipped=skipped,
                         message=f"Frage {i}/{total_questions}: Review-Pass Fehler – {review_exc}",
                     )
+                    if review is not None:
+                        emit_cost_progress("review", args.review_model, review, q, i)
                     audit["models"]["review"] = args.review_model
                     report["passes"]["reviewRan"] += 1
                     # one robust fallback attempt with reduced audit context
@@ -1200,6 +1290,7 @@ def process_questions(
                             model=args.review_model,
                             question_images=question_images,
                         )
+                        emit_cost_progress("review_retry", args.review_model, review_retry, q, i)
                         audit["reviewPass"] = review_retry
                         if review_retry.get("recommendManualReview"):
                             audit["maintenance"]["needsMaintenance"] = True
@@ -1250,6 +1341,7 @@ def process_questions(
             audit["status"] = "error"
             audit["error"] = str(e)
 
+        audit.pop("costs", None)
         q["aiAudit"] = audit
         for reason in (((audit.get("maintenance") or {}).get("reasons") or [])):
             report["maintenanceReasons"][reason] = int(report["maintenanceReasons"].get(reason, 0)) + 1
@@ -1266,6 +1358,7 @@ def process_questions(
             message=f"Frage {i}/{total_questions} abgeschlossen (Status: {audit.get('status')}).",
         )
         if args.checkpoint_every and processed % args.checkpoint_every == 0:
+            _remove_costs_from_question_audits(questions)
             out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
             save_json(args.output, out_obj)
             print(f"[{i}/{len(questions)}] checkpoint | processed={processed} done={done} skipped={skipped} lastStatus={audit.get('status')}")
@@ -1328,6 +1421,7 @@ def process_questions(
         questions=questions,
         schema_cluster_refinement=schema_cluster_refinement,
         emit_progress=emit_progress,
+        cost_callback=emit_cost_progress,
     )
 
     if bool(getattr(args, "enable_repeat_reconstruction", True)):
@@ -1483,6 +1577,7 @@ def process_questions(
                     schema=schema_reconstruction,
                     model=args.reconstruction_model,
                 )
+                emit_cost_progress("reconstruction", args.reconstruction_model, rec, q, idx)
                 audit["reconstruction"] = rec
                 if bool(rec.get("recommendManualReview")):
                     audit["maintenance"]["needsMaintenance"] = True
@@ -1515,6 +1610,7 @@ def process_questions(
                         schema=schema_reconstruction,
                         model=args.reconstruction_model,
                     )
+                    emit_cost_progress("reconstruction_retry", args.reconstruction_model, rec_retry, q, idx)
                     audit["reconstruction"] = rec_retry
                     if bool(rec_retry.get("recommendManualReview")):
                         audit["maintenance"]["needsMaintenance"] = True
@@ -1624,6 +1720,7 @@ def process_questions(
                     schema=schema_explainer,
                     model=args.explainer_model,
                 )
+                emit_cost_progress("explainer", args.explainer_model, expl, q, idx)
                 audit.setdefault("models", {})["explainer"] = args.explainer_model
                 audit["explainer"] = expl
                 emit_progress(
@@ -1672,6 +1769,7 @@ def process_questions(
     # already assigned deterministic clusters and optional LLM refinement may have
     # removed/merged cluster members. Re-running cluster_abstractions() at finalize
     # would overwrite those refined IDs immediately before saving.
+    _remove_costs_from_question_audits(questions)
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
     emit_progress(
@@ -1685,12 +1783,29 @@ def process_questions(
     )
 
     run_report_path = (getattr(args, "run_report", "") or "").strip()
+    cost_report_path = _save_cost_report_if_configured(args=args, records=cost_records, total_questions=total_questions, processed=processed, done=done, skipped=skipped)
+    if cost_report_path:
+        emit_progress(
+            event="cost_report_written",
+            stage="finalize",
+            processed=processed,
+            done=done,
+            skipped=skipped,
+            total=total_questions,
+            cost_report_path=cost_report_path,
+            message=f"Kostenreport geschrieben: {cost_report_path}.",
+        )
+
     if run_report_path:
+        report["costs"] = add_records(cost_records)
+        report["costReportPath"] = cost_report_path
         report["processed"] = processed
         report["done"] = done
         report["skipped"] = skipped
         save_json(run_report_path, report)
 
+    report["costs"] = add_records(cost_records)
+    report["costReportPath"] = cost_report_path
     print(f"Finished. processed={processed} done={done} skipped={skipped}. Output: {args.output}")
     emit_progress(
         event="finished",
@@ -1726,6 +1841,33 @@ def rerun_postprocessing_from_output(
         if progress_callback is None:
             return
         progress_callback(payload)
+
+    cost_records: List[Dict[str, Any]] = []
+    cost_sequence = 0
+
+    def emit_cost_progress(stage: str, model: str, result: Optional[Dict[str, Any]], question: Optional[Dict[str, Any]] = None, question_index: Optional[int] = None) -> None:
+        nonlocal cost_sequence
+        usage = (result or {}).pop("_llm_usage", None) if isinstance(result, dict) else None
+        record = make_cost_record(stage=stage, model=model, usage=usage)
+        cost_sequence += 1
+        record["sequence"] = cost_sequence
+        if question is not None:
+            record["questionId"] = str(question.get("id") or question.get("questionId") or "")
+        if question_index is not None:
+            record["questionIndex"] = int(question_index)
+        cost_records.append(record)
+        summary = add_records(cost_records)
+        emit_progress(
+            event="cost_updated",
+            stage=stage,
+            cost_stage_eur=record["costEur"],
+            cost_total_eur=(summary.get("total") or {}).get("costEur", 0.0),
+            cost_stage_formatted=record.get("costFormatted") or format_eur(record.get("costEur") or 0.0),
+            cost_total_formatted=(summary.get("total") or {}).get("costFormatted") or format_eur((summary.get("total") or {}).get("costEur") or 0.0),
+            input_tokens=record["inputTokens"],
+            output_tokens=record["outputTokens"],
+            message=f"Kosten aktualisiert: {stage} {record.get('costFormatted') or format_eur(record.get('costEur') or 0.0)} (kumulativ {(summary.get('total') or {}).get('costFormatted') or format_eur((summary.get('total') or {}).get('costEur') or 0.0)}).",
+        )
 
     total_questions = len(questions)
     selected_question_ids = {str(x).strip() for x in (getattr(args, "only_question_ids", []) or []) if str(x).strip()}
@@ -1861,6 +2003,7 @@ def rerun_postprocessing_from_output(
                         model=args.review_model,
                         question_images=question_images,
                     )
+                    emit_cost_progress("review", args.review_model, review, q, i)
                     audit.setdefault("models", {})["review"] = args.review_model
                     audit["reviewPass"] = review
                     review_indices = normalize_indices(review.get("finalCorrectIndices", []), len(q.get("answers") or []), valid_indices=external_indices)
@@ -1959,6 +2102,7 @@ def rerun_postprocessing_from_output(
                         schema=schema_reconstruction,
                         model=args.reconstruction_model,
                     )
+                    emit_cost_progress("reconstruction", args.reconstruction_model, rec, q, i)
                     audit["reconstruction"] = rec
                     if bool(rec.get("recommendManualReview")):
                         maintenance = audit.get("maintenance") or {}
@@ -2031,6 +2175,7 @@ def rerun_postprocessing_from_output(
                         schema=schema_explainer,
                         model=args.explainer_model,
                     )
+                    emit_cost_progress("explainer", args.explainer_model, expl, q, i)
                     audit.setdefault("models", {})["explainer"] = args.explainer_model
                     audit["explainer"] = expl
                     explainer_done += 1
@@ -2085,6 +2230,7 @@ def rerun_postprocessing_from_output(
             q["aiMaintenanceReasons"] = audit["maintenance"].get("reasons")
 
         if args.checkpoint_every and i % args.checkpoint_every == 0:
+            _remove_costs_from_question_audits(questions)
             out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
             save_json(args.output, out_obj)
 
@@ -2115,10 +2261,21 @@ def rerun_postprocessing_from_output(
         questions=questions,
         schema_cluster_refinement=schema_cluster_refinement,
         emit_progress=emit_progress,
+        cost_callback=emit_cost_progress,
     )
 
+    _remove_costs_from_question_audits(questions)
     out_obj = _build_output_obj(container=container, questions=questions, cleanup_spec=cleanup_spec)
     save_json(args.output, out_obj)
+    cost_report_path = _save_cost_report_if_configured(args=args, records=cost_records, total_questions=total_questions, processed=(review_done + reconstruction_done + explainer_done), done=(review_done + reconstruction_done + explainer_done), skipped=skipped)
+    if cost_report_path:
+        emit_progress(
+            event="cost_report_written",
+            stage="finalize",
+            total=total_questions,
+            cost_report_path=cost_report_path,
+            message=f"Kostenreport geschrieben: {cost_report_path}.",
+        )
     emit_progress(
         event="postprocess_only_finished",
         stage="postprocessing",

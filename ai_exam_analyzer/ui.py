@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from ai_exam_analyzer.config import CONFIG
+from ai_exam_analyzer.cost_tracking import format_eur
 from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.io_utils import load_json, save_json
 from ai_exam_analyzer.model_profiles import (
@@ -288,6 +289,11 @@ def _build_args() -> SimpleNamespace:
     if "output_folder" not in st.session_state:
         st.session_state["output_folder"] = st.session_state["data_folder"]
 
+    pending_cfg = st.session_state.pop("_pending_analysis_config", None)
+    if isinstance(pending_cfg, dict):
+        _apply_settings_to_ui_state(pending_cfg)
+        st.session_state["analysis_config_apply_success"] = True
+
     data_folder = st.session_state["data_folder"]
     output_folder = st.session_state["output_folder"]
 
@@ -300,6 +306,8 @@ def _build_args() -> SimpleNamespace:
 
     with st.sidebar:
         st.header("Einstellungen")
+        if st.session_state.pop("analysis_config_apply_success", False):
+            st.success("Einstellungen aus der Analyse-Konfig wurden in die UI übernommen.")
         run_mode = st.radio(
             "Modus",
             options=["Vollständige Analyse", "Parameter-Einstellung", "Postprocessing only", "Explainer only"],
@@ -438,9 +446,8 @@ def _build_args() -> SimpleNamespace:
                             raise ValueError("Analyse-Konfig muss ein JSON-Objekt sein.")
                         if isinstance(loaded_cfg.get("settings"), dict):
                             loaded_cfg = loaded_cfg["settings"]
-                        _apply_settings_to_ui_state(loaded_cfg)
+                        st.session_state["_pending_analysis_config"] = loaded_cfg
                         st.session_state["analysis_config_applied_path"] = analysis_config_path
-                        st.success("Einstellungen aus der Analyse-Konfig wurden in die UI übernommen.")
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Analyse-Konfig konnte nicht geladen werden: {exc}")
@@ -1004,6 +1011,7 @@ def _build_args() -> SimpleNamespace:
         review_min_maintenance_severity=int(review_min_maintenance_severity),
         topic_candidate_top_k=int(CONFIG["TOPIC_CANDIDATE_TOP_K"]),
         run_report=str(CONFIG.get("RUN_REPORT_PATH", "")),
+        cost_report=str(CONFIG.get("COST_REPORT_PATH", "")),
         topic_candidate_outside_force_passb_conf=float(CONFIG["TOPIC_CANDIDATE_OUTSIDE_FORCE_PASSB_CONF"]),
         enable_repeat_reconstruction=bool(enable_repeat_reconstruction),
         auto_apply_repeat_reconstruction=bool(auto_apply_repeat_reconstruction),
@@ -1019,6 +1027,23 @@ def _build_args() -> SimpleNamespace:
         analysis_config_path=(analysis_config_path or "").strip(),
         save_tuning_config_path=(save_tuning_config_path or "").strip(),
     )
+
+
+def _settings_payload_from_args(args: Any) -> Dict[str, Any]:
+    """Persist every UI/configurable analysis value except secrets."""
+    out: Dict[str, Any] = {}
+    for key, value in vars(args).items():
+        if key == "api_key":
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            out[key] = value
+        elif isinstance(value, list):
+            out[key] = list(value)
+        elif isinstance(value, dict):
+            out[key] = dict(value)
+        else:
+            out[key] = str(value)
+    return out
 
 
 def _prepare_image_store(args: SimpleNamespace) -> Optional[QuestionImageStore]:
@@ -1072,7 +1097,24 @@ def main() -> None:
     progress_bar = st.progress(0)
     status_text = st.empty()
     metrics = st.empty()
+    current_step_text = st.empty()
     event_log = st.empty()
+    init_events: List[str] = []
+
+    def show_live_step(stage: str, message: str, *, progress: float = 0.0, detail: str = "") -> None:
+        progress_bar.progress(min(1.0, max(0.0, float(progress))))
+        status_text.markdown(f"**[{stage}]** {message}")
+        cols = metrics.columns(4)
+        cols[0].metric("Verarbeitet", "0/—")
+        cols[1].metric("Abgeschlossen", "0")
+        cols[2].metric("Übersprungen", "0")
+        cols[3].metric("Kosten kumulativ", format_eur(0.0))
+        current_step_text.markdown(f"**Aktueller Schritt:** {stage} – {message}")
+        suffix = f" — {detail}" if detail else ""
+        init_events.append(f"- [{stage}/init] {message}{suffix}")
+        if len(init_events) > 20:
+            del init_events[0]
+        event_log.markdown("**Live-Log (neueste unten)**\n" + "\n".join(init_events))
 
     if not start_button:
         st.info(f"Setze deine Einstellungen und klicke auf **{start_label}**.")
@@ -1086,11 +1128,14 @@ def main() -> None:
     os.environ[env_name] = args.api_key
 
     try:
+        show_live_step("initialisierung", "Lade Topic-Tree …", progress=0.03, detail=args.topics)
         topic_tree = load_json(args.topics)
+        show_live_step("initialisierung", "Baue Topic-Katalog …", progress=0.07)
         catalog, key_map = build_topic_catalog(topic_tree)
         topic_keys = [row["topicKey"] for row in catalog]
         topic_catalog_text = format_topic_catalog_for_prompt(catalog)
 
+        show_live_step("initialisierung", f"Erzeuge JSON-Schemas für {len(topic_keys)} Topic-Keys …", progress=0.11)
         schema_a = schema_pass_a(topic_keys)
         schema_b = schema_pass_b(topic_keys)
         schema_review = schema_review_pass(topic_keys)
@@ -1098,6 +1143,7 @@ def main() -> None:
         schema_explainer = schema_explainer_pass()
         schema_cluster_refinement = schema_abstraction_cluster_refinement()
 
+        show_live_step("initialisierung", "Lade Input-Datensatz …", progress=0.16, detail=args.input)
         data = load_json(args.input)
         if isinstance(data, dict) and "questions" in data:
             questions = data["questions"]
@@ -1108,26 +1154,27 @@ def main() -> None:
         else:
             raise ValueError("Input muss Liste oder Objekt mit 'questions' sein.")
 
+        show_live_step("initialisierung", f"Datensatz geladen ({len(questions)} Fragen).", progress=0.22)
+        if args.cleanup_spec:
+            show_live_step("initialisierung", "Lade Cleanup-Spezifikation …", progress=0.25, detail=args.cleanup_spec)
         cleanup_spec = load_json(args.cleanup_spec) if args.cleanup_spec else None
+        if args.images_zip:
+            show_live_step("initialisierung", "Bereite Fragenbilder vor …", progress=0.30, detail=args.images_zip)
         image_store = _prepare_image_store(args)
+        if args.knowledge_zip or args.knowledge_index:
+            show_live_step("knowledge", "Lade/baue Knowledge Base …", progress=0.36, detail=args.knowledge_index or args.knowledge_zip)
+        else:
+            show_live_step("knowledge", "Knowledge Base deaktiviert/übersprungen.", progress=0.36)
         knowledge_base = _prepare_knowledge_base(args, topic_tree)
+        kb_chunks = len(getattr(knowledge_base, "chunks", []) or []) if knowledge_base is not None else 0
+        show_live_step("initialisierung", f"Initialisierung abgeschlossen (Knowledge-Chunks: {kb_chunks}).", progress=0.42)
 
         auto_report: Optional[str] = None
         if bool(getattr(args, "tuning_only", False)) and not bool(getattr(args, "postprocess_only", False)):
-            status_text.markdown("**[autotune]** Analysiere Datensatz und ermittle passende Parameter …")
-            current_settings = {
-                "trigger_answer_conf": float(args.trigger_answer_conf),
-                "trigger_topic_conf": float(args.trigger_topic_conf),
-                "apply_change_min_conf_b": float(args.apply_change_min_conf_b),
-                "low_conf_maintenance_threshold": float(args.low_conf_maintenance_threshold),
-                "knowledge_top_k": int(args.knowledge_top_k),
-                "knowledge_max_chars": int(args.knowledge_max_chars),
-                "knowledge_min_score": float(args.knowledge_min_score),
-                "enable_review_pass": bool(args.enable_review_pass),
-                "enable_reconstruction_pass": bool(args.enable_reconstruction_pass),
-                "enable_repeat_reconstruction": bool(args.enable_repeat_reconstruction),
-            }
-            recommendations, auto_report = recommend_settings(
+            show_live_step("autotune", "Analysiere Datensatzprofil, Retrieval-Qualität und Beispiel-Fragen …", progress=0.50)
+            current_settings = _settings_payload_from_args(args)
+            show_live_step("autotune", "Frage Modell nach robusten Parametern und Kostenabschätzung …", progress=0.62, detail=args.passB_model or args.passA_model)
+            recommendations, auto_report, cost_estimate = recommend_settings(
                 provider=args.llm_provider,
                 api_key=args.api_key,
                 model=args.passB_model or args.passA_model,
@@ -1135,7 +1182,15 @@ def main() -> None:
                 questions=questions,
                 current=current_settings,
                 knowledge_base=knowledge_base,
+                models={
+                    "passA": args.passA_model,
+                    "passB": args.passB_model,
+                    "review": args.review_model,
+                    "reconstruction": args.reconstruction_model,
+                    "explainer": args.explainer_model,
+                },
             )
+            show_live_step("autotune", f"Empfehlungen erhalten ({len(recommendations)} Parameter).", progress=0.82)
             for key, value in recommendations.items():
                 if hasattr(args, key):
                     setattr(args, key, value)
@@ -1146,31 +1201,53 @@ def main() -> None:
             tuning_payload = {
                 "llm_provider": args.llm_provider,
                 "created_from_input": args.input,
-                "settings": {
-                    "quality_cost_profile": args.quality_cost_profile,
-                    "trigger_answer_conf": float(args.trigger_answer_conf),
-                    "trigger_topic_conf": float(args.trigger_topic_conf),
-                    "apply_change_min_conf_b": float(args.apply_change_min_conf_b),
-                    "low_conf_maintenance_threshold": float(args.low_conf_maintenance_threshold),
-                    "knowledge_top_k": int(args.knowledge_top_k),
-                    "knowledge_max_chars": int(args.knowledge_max_chars),
-                    "knowledge_min_score": float(args.knowledge_min_score),
-                    "enable_review_pass": bool(args.enable_review_pass),
-                    "enable_reconstruction_pass": bool(args.enable_reconstruction_pass),
-                    "enable_repeat_reconstruction": bool(args.enable_repeat_reconstruction),
-                },
+                "settings": _settings_payload_from_args(args),
                 "report": auto_report,
+                "cost_estimate": cost_estimate,
             }
             target_cfg = args.save_tuning_config_path or _resolve_path(folder=os.path.dirname(args.input), filename="analysis_config.json")
+            show_live_step("autotune", "Speichere Parameter-Konfiguration …", progress=0.92, detail=target_cfg)
             from ai_exam_analyzer.io_utils import save_json
-            save_json(target_cfg, tuning_payload["settings"])
+            save_json(target_cfg, tuning_payload)
+            show_live_step("autotune", "Parameter-Einstellung abgeschlossen.", progress=1.0, detail=target_cfg)
             st.success(f"Parameter-Einstellung abgeschlossen. Konfig gespeichert: {target_cfg}")
             st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
+            cost_total = (cost_estimate.get("total") or {})
+            st.metric("Geschätzte Gesamtkosten", cost_total.get("costFormatted") or format_eur(float(cost_total.get("costEur") or 0.0)))
+            tuning_cost = (cost_estimate.get("tuningRequest") or {})
+            st.metric("Kosten dieser Parameter-Abfrage", tuning_cost.get("costFormatted") or format_eur(float(tuning_cost.get("costEur") or 0.0)))
+            profile_rows = []
+            for profile_name, payload in (cost_estimate.get("profileEstimates") or {}).items():
+                total_payload = payload.get("total") or {}
+                by_stage = ((payload.get("estimate") or {}).get("byStage") or {})
+                profile_rows.append({
+                    "Voreinstellung": payload.get("label") or profile_name,
+                    "Profil-Key": profile_name,
+                    "Gesamt": total_payload.get("costFormatted") or format_eur(float(total_payload.get("costEur") or 0.0)),
+                    "Initialisierung": (by_stage.get("initialization_and_loading") or {}).get("costFormatted") or format_eur(0.0),
+                    "Retrieval/Kontext": (by_stage.get("retrieval_and_context_building") or {}).get("costFormatted") or format_eur(0.0),
+                    "Basis A": (by_stage.get("base_pass_a") or {}).get("costFormatted") or format_eur(0.0),
+                    "Pass B geschätzt": (by_stage.get("base_pass_b_estimated") or {}).get("costFormatted") or format_eur(0.0),
+                    "Review/Pass C": (by_stage.get("review_pass_estimated") or {}).get("costFormatted") or format_eur(0.0),
+                    "Cluster-Refinement": (by_stage.get("abstraction_cluster_refinement") or {}).get("costFormatted") or format_eur(0.0),
+                    "Repeat-Reconstruction": (by_stage.get("repeat_reconstruction") or {}).get("costFormatted") or format_eur(0.0),
+                    "Reconstruction": (by_stage.get("reconstruction_pass") or {}).get("costFormatted") or format_eur(0.0),
+                    "Explainer": (by_stage.get("explainer_pass") or {}).get("costFormatted") or format_eur(0.0),
+                    "Output/Report": (by_stage.get("output_and_cost_report") or {}).get("costFormatted") or format_eur(0.0),
+                })
+            if profile_rows:
+                st.subheader("Kostenvergleich aller Voreinstellungen")
+                st.caption("Repeat-Reconstruction ist ein deterministischer Abgleich wiederholter Frage-/Antwortmuster über Cluster/Jahrgänge; deshalb entstehen dafür keine LLM-Tokens, der Pass wird aber bewusst in der Aufschlüsselung gezeigt.")
+                st.dataframe(profile_rows, use_container_width=True, hide_index=True)
+            st.json(cost_estimate)
             return
 
-        recent_events: List[str] = []
+        show_live_step("pipeline", "Starte Analyse-Workflow …", progress=0.45)
+        recent_events: List[str] = list(init_events[-8:])
+        latest_cost_total_formatted = format_eur(0.0)
 
         def on_progress(event: Dict[str, Any]) -> None:
+            nonlocal latest_cost_total_formatted
             total = max(1, int(event.get("total") or len(questions) or 1))
             processed = int(event.get("processed", 0) or 0)
             done_count = int(event.get("done", 0) or 0)
@@ -1188,17 +1265,25 @@ def main() -> None:
                 headline = f"{headline} *(Frage {index}/{total})*"
             status_text.markdown(f"**[{stage}]** {headline}")
 
+            if "cost_total_formatted" in event or "cost_total_eur" in event:
+                latest_cost_total_formatted = str(event.get("cost_total_formatted") or format_eur(float(event.get("cost_total_eur") or 0.0)))
+
             cols = metrics.columns(4)
             cols[0].metric("Verarbeitet", f"{processed}/{total}")
             cols[1].metric("Abgeschlossen", str(done_count))
             cols[2].metric("Übersprungen", str(skipped_count))
-            cols[3].metric("Phase", stage)
+            cols[3].metric("Kosten kumulativ", latest_cost_total_formatted)
+            current_step_text.markdown(f"**Aktueller Schritt:** {stage} – {headline}")
 
             details = []
             if "retrieval_quality" in event:
                 details.append(f"rq={float(event.get('retrieval_quality') or 0.0):.2f}")
             if "evidence_count" in event:
                 details.append(f"evidence={int(event.get('evidence_count') or 0)}")
+            if "cost_stage_eur" in event or "cost_stage_formatted" in event:
+                details.append(f"cost_step={event.get('cost_stage_formatted') or format_eur(float(event.get('cost_stage_eur') or 0.0))}")
+            if "cost_total_eur" in event or "cost_total_formatted" in event:
+                details.append(f"cost_total={event.get('cost_total_formatted') or format_eur(float(event.get('cost_total_eur') or 0.0))}")
             detail_text = f" ({', '.join(details)})" if details else ""
 
             line = f"- [{stage}/{event_name}] {message}{detail_text}"
@@ -1228,6 +1313,7 @@ def main() -> None:
 
         progress_bar.progress(1.0)
         st.success(f"Analyse beendet. Ergebnis gespeichert unter: {args.output}")
+        st.caption("Kosten-/Token-Report: automatisch neben der Ausgabe als `.costs.json` gespeichert (oder über COST_REPORT_PATH konfigurierbar).")
         if auto_report:
             st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
 

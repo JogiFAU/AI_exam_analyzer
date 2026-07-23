@@ -127,12 +127,30 @@ def call_json_schema(
         resp = _poll_response_until_terminal(resp)
         status = str(getattr(resp, "status", ""))
         if status == "completed":
-            return _parse_json_from_response(resp)
+            parsed = _parse_json_from_response(resp)
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                usage_dict = usage.model_dump() if hasattr(usage, "model_dump") else (usage if isinstance(usage, dict) else {})
+                parsed["_llm_usage"] = {
+                    "input_tokens": usage_dict.get("input_tokens") or usage_dict.get("prompt_tokens") or 0,
+                    "output_tokens": usage_dict.get("output_tokens") or usage_dict.get("completion_tokens") or 0,
+                    "total_tokens": usage_dict.get("total_tokens") or 0,
+                }
+            return parsed
 
         # Some providers occasionally mark responses as incomplete even though
         # the structured JSON is already parseable. Use it when possible.
         try:
-            return _parse_json_from_response(resp)
+            parsed = _parse_json_from_response(resp)
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                usage_dict = usage.model_dump() if hasattr(usage, "model_dump") else (usage if isinstance(usage, dict) else {})
+                parsed["_llm_usage"] = {
+                    "input_tokens": usage_dict.get("input_tokens") or usage_dict.get("prompt_tokens") or 0,
+                    "output_tokens": usage_dict.get("output_tokens") or usage_dict.get("completion_tokens") or 0,
+                    "total_tokens": usage_dict.get("total_tokens") or 0,
+                }
+            return parsed
         except Exception:
             pass
 
