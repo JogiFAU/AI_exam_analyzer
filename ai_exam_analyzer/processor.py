@@ -583,7 +583,10 @@ def process_questions(
     def record_cost(stage: str, model: str, result: Optional[Dict[str, Any]], question: Optional[Dict[str, Any]] = None, question_index: Optional[int] = None) -> Dict[str, Any]:
         nonlocal cost_sequence
         usage = (result or {}).pop("_llm_usage", None) if isinstance(result, dict) else None
+        attempt_count = (result or {}).pop("_llm_attempt_count", None) if isinstance(result, dict) else None
         record = make_cost_record(stage=stage, model=model, usage=usage)
+        if attempt_count is not None:
+            record["attemptCount"] = int(attempt_count or 0)
         cost_sequence += 1
         record["sequence"] = cost_sequence
         if question is not None:
@@ -1484,7 +1487,7 @@ def process_questions(
             message="Repeat-Reconstruction abgeschlossen.",
         )
 
-    if bool(getattr(args, "enable_reconstruction_pass", True)):
+    if bool(getattr(args, "enable_reconstruction_pass", False)):
         emit_progress(
             event="reconstruction_pass_started",
             stage="postprocessing",
@@ -1658,7 +1661,7 @@ def process_questions(
             message="Reconstruction-Pass abgeschlossen.",
         )
 
-    if bool(getattr(args, "enable_explainer_pass", False)):
+    if bool(getattr(args, "enable_explainer_pass", True)):
         emit_progress(
             event="explainer_pass_started",
             stage="postprocessing",
@@ -1848,7 +1851,10 @@ def rerun_postprocessing_from_output(
     def emit_cost_progress(stage: str, model: str, result: Optional[Dict[str, Any]], question: Optional[Dict[str, Any]] = None, question_index: Optional[int] = None) -> None:
         nonlocal cost_sequence
         usage = (result or {}).pop("_llm_usage", None) if isinstance(result, dict) else None
+        attempt_count = (result or {}).pop("_llm_attempt_count", None) if isinstance(result, dict) else None
         record = make_cost_record(stage=stage, model=model, usage=usage)
+        if attempt_count is not None:
+            record["attemptCount"] = int(attempt_count or 0)
         cost_sequence += 1
         record["sequence"] = cost_sequence
         if question is not None:
@@ -2048,7 +2054,7 @@ def rerun_postprocessing_from_output(
                     message=f"Review {i}/{total_questions} übersprungen (bereits vorhanden, Frage {qid}).",
                 )
 
-        if bool(getattr(args, "enable_reconstruction_pass", True)):
+        if bool(getattr(args, "enable_reconstruction_pass", False)):
             current_reconstruction = audit.get("reconstruction")
             should_rerun_reconstruction = bool(getattr(args, "force_rerun_reconstruction", False)) or not isinstance(current_reconstruction, dict) or ("error" in current_reconstruction)
             if should_rerun_reconstruction:
@@ -2147,7 +2153,7 @@ def rerun_postprocessing_from_output(
                 )
 
 
-        if bool(getattr(args, "enable_explainer_pass", False)):
+        if bool(getattr(args, "enable_explainer_pass", True)):
             current_explainer = audit.get("explainer")
             should_rerun_explainer = bool(getattr(args, "force_rerun_explainer", False)) or not isinstance(current_explainer, dict) or ("error" in current_explainer)
             if should_rerun_explainer:

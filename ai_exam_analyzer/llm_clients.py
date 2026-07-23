@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 
+from ai_exam_analyzer.cost_tracking import add_usage_records, normalize_usage
 from ai_exam_analyzer.openai_client import call_json_schema as _openai_call_json_schema
 
 
@@ -90,6 +91,7 @@ class GeminiResponsesAdapter:
             config["temperature"] = float(temperature)
 
         last_error: Optional[Exception] = None
+        attempt_usages: List[Dict[str, int]] = []
         for _ in range(max(0, int(max_retries)) + 1):
             try:
                 resp = self._sdk.models.generate_content(
@@ -106,11 +108,11 @@ class GeminiResponsesAdapter:
                 usage = getattr(resp, "usage_metadata", None)
                 if usage is not None:
                     usage_dict = usage.model_dump() if hasattr(usage, "model_dump") else (usage if isinstance(usage, dict) else {})
-                    parsed["_llm_usage"] = {
-                        "input_tokens": usage_dict.get("prompt_token_count") or usage_dict.get("input_tokens") or 0,
-                        "output_tokens": usage_dict.get("candidates_token_count") or usage_dict.get("output_tokens") or 0,
-                        "total_tokens": usage_dict.get("total_token_count") or usage_dict.get("total_tokens") or 0,
-                    }
+                    normalized_usage = normalize_usage(usage_dict)
+                    if normalized_usage["total_tokens"]:
+                        attempt_usages.append(normalized_usage)
+                    parsed["_llm_usage"] = add_usage_records(attempt_usages or [normalized_usage])
+                    parsed["_llm_attempt_count"] = max(1, len(attempt_usages))
                 return parsed
             except Exception as exc:
                 last_error = exc

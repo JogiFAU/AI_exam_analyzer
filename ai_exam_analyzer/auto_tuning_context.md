@@ -22,12 +22,14 @@ Diese Dokumentation beschreibt, wie der Analyzer arbeitet und wie Parameter die 
   Höher = mehr konservative Markierungen.
 - `knowledge_top_k`, `knowledge_max_chars`, `knowledge_min_score`:
   Steuern Evidenzmenge/-qualität aus Knowledge Base.
-- `enable_review_pass`, `enable_reconstruction_pass`, `enable_repeat_reconstruction`:
-  Zusätzliche Qualitätsnetze für schwierige/legacy-lastige Datensätze.
+- `enable_review_pass`, `enable_repeat_reconstruction`, `enable_explainer_pass`:
+  Zusätzliche Qualitätsnetze für schwierige/legacy-lastige Datensätze und didaktische Nachvollziehbarkeit.
+- `enable_reconstruction_pass`:
+  Im Standard-Workflow deaktiviert lassen; der Pass ist teuer und soll vom Auto-Tuning nicht empfohlen werden.
 
 ## 3) Qualitätsabhängige Heuristik
 - Bei **hoher Datenqualität** (klare Frage, valide Antworten, vorhandene korrekte Indizes, wenig Uneindeutigkeit):
-  - Trigger etwas niedriger, Review/Reconstruction selektiver.
+  - Trigger etwas niedriger, Review selektiver, Reconstruction deaktiviert lassen, Explainer aktiv lassen.
 - Bei **heterogenen oder schwachen Datensätzen** (kurze Texte, fehlende Korrektheiten, unklare Formulierungen, Bildlücken):
   - Trigger höher (mehr Pass B), konservativere Auto-Apply-Schwelle,
   - mehr Maintenance-Markierungen,

@@ -33,6 +33,36 @@ def estimate_tokens_from_text(text: Any) -> int:
     return max(1, int(len(str(text or "")) / 4) + 1)
 
 
+def normalize_usage(usage: Optional[Dict[str, Any]] = None) -> Dict[str, int]:
+    """Normalize provider-specific usage payloads into input/output/total tokens."""
+    usage = usage or {}
+    in_tok = int(
+        usage.get("input_tokens")
+        or usage.get("prompt_tokens")
+        or usage.get("prompt_token_count")
+        or 0
+    )
+    out_tok = int(
+        usage.get("output_tokens")
+        or usage.get("completion_tokens")
+        or usage.get("candidates_token_count")
+        or 0
+    )
+    total = int(usage.get("total_tokens") or usage.get("total_token_count") or (in_tok + out_tok))
+    return {"input_tokens": in_tok, "output_tokens": out_tok, "total_tokens": total}
+
+
+def add_usage_records(usages: Iterable[Optional[Dict[str, Any]]]) -> Dict[str, int]:
+    """Aggregate usage from every billed LLM API attempt, including retries."""
+    total = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    for usage in usages:
+        normalized = normalize_usage(usage)
+        total["input_tokens"] += normalized["input_tokens"]
+        total["output_tokens"] += normalized["output_tokens"]
+        total["total_tokens"] += normalized["total_tokens"]
+    return total
+
+
 def cost_usd(*, model: str, input_tokens: int = 0, output_tokens: int = 0) -> float:
     pricing = pricing_for_model(model)
     return round(((max(0, input_tokens) * pricing["input"]) + (max(0, output_tokens) * pricing["output"])) / 1_000_000.0, 8)
@@ -62,10 +92,10 @@ def empty_cost_record(*, stage: str, model: str, estimated: bool = False) -> Dic
 
 
 def make_cost_record(*, stage: str, model: str, usage: Optional[Dict[str, Any]] = None, input_tokens: int = 0, output_tokens: int = 0, estimated: bool = False) -> Dict[str, Any]:
-    usage = usage or {}
-    in_tok = int(usage.get("input_tokens") or usage.get("prompt_tokens") or input_tokens or 0)
-    out_tok = int(usage.get("output_tokens") or usage.get("completion_tokens") or output_tokens or 0)
-    total = int(usage.get("total_tokens") or (in_tok + out_tok))
+    normalized = normalize_usage(usage)
+    in_tok = int(normalized.get("input_tokens") or input_tokens or 0)
+    out_tok = int(normalized.get("output_tokens") or output_tokens or 0)
+    total = int(normalized.get("total_tokens") or (in_tok + out_tok))
     usd = cost_usd(model=model, input_tokens=in_tok, output_tokens=out_tok)
     eur = usd_to_eur(usd)
     return {
