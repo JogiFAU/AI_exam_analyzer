@@ -314,13 +314,13 @@ def _build_args() -> SimpleNamespace:
             st.success("Einstellungen aus der Analyse-Konfig wurden in die UI übernommen.")
         run_mode = st.radio(
             "Modus",
-            options=["Vollständige Analyse", "Parameter-Einstellung", "Postprocessing only", "Explainer only"],
+            options=["Prä-Analyse & Einstellungen", "Vollständige Analyse", "Postprocessing only", "Explainer only"],
             index=0,
-            help="Postprocessing-only berechnet Review/Reconstruction auf bestehendem aiAudit neu; Explainer-only berechnet nur didaktische Erklärungen für bereits annotierte Daten.",
+            help="Prä-Analyse & Einstellungen ermittelt robuste Parameter vor der vollständigen Analyse. Postprocessing-only berechnet Review/Reconstruction auf bestehendem aiAudit neu; Explainer-only berechnet nur didaktische Erklärungen für bereits annotierte Daten.",
         )
         is_postprocess_only = (run_mode in {"Postprocessing only", "Explainer only"})
         is_explainer_only = (run_mode == "Explainer only")
-        is_tuning_only = (run_mode == "Parameter-Einstellung")
+        is_tuning_only = (run_mode == "Prä-Analyse & Einstellungen")
         is_full_analysis = (run_mode == "Vollständige Analyse")
 
         with st.expander("📁 Datenquellen", expanded=True):
@@ -416,7 +416,7 @@ def _build_args() -> SimpleNamespace:
                 label="Analyse-Konfig JSON",
                 default_path=_resolve_path(folder=data_folder, filename=analysis_config_default_name),
                 start_dir=data_folder,
-                help_text="Konfig mit Parametern aus Parameter-Einstellung. Sie wird erst durch 'Einstellungen anwenden' übernommen.",
+                help_text="Konfig mit Parametern aus Prä-Analyse & Einstellungen. Sie wird erst durch 'Einstellungen anwenden' übernommen.",
                 optional=True,
             )
             save_tuning_config_path = _file_picker_row(
@@ -424,7 +424,7 @@ def _build_args() -> SimpleNamespace:
                 label="Speicherziel Parameter-Konfig",
                 default_path=_resolve_path(folder=data_folder, filename=analysis_config_default_name),
                 start_dir=data_folder,
-                help_text="Zieldatei für ermittelte Parameter aus Parameter-Einstellung.",
+                help_text="Zieldatei für ermittelte Parameter aus Prä-Analyse & Einstellungen.",
                 optional=False,
                 require_existing=False,
             ) if is_tuning_only else analysis_config_path
@@ -464,7 +464,7 @@ def _build_args() -> SimpleNamespace:
                 use_images_zip = st.checkbox(
                     "Fragenbilder ZIP nutzen",
                     value=images_default_exists,
-                    help="Wenn aktiv, werden Fragebilder aus einer ZIP geladen und dem Modell mitgegeben. Das ist nur in der vollständigen Analyse relevant; Postprocessing und Parameter-Einstellung nutzen keine Fragebilder.",
+                    help="Wenn aktiv, werden Fragebilder aus einer ZIP geladen und dem Modell mitgegeben. Das ist nur in der vollständigen Analyse relevant; Postprocessing und Prä-Analyse & Einstellungen nutzen keine Fragebilder.",
                 )
                 if not images_default_exists:
                     st.caption("ℹ️ `images.zip` nicht im Input-Ordner gefunden – Nutzung standardmäßig aus, manuelle Auswahl weiterhin möglich.")
@@ -485,7 +485,7 @@ def _build_args() -> SimpleNamespace:
                 use_knowledge_zip = st.checkbox(
                     "Knowledge ZIP nutzen",
                     value=knowledge_default_exists,
-                    help="Wenn aktiv, wird Wissen aus einer ZIP-Datei geladen. Relevant für vollständige Analyse und Parameter-Einstellung; reine Postprocessing-Modi verwenden bestehende aiAudit-Daten.",
+                    help="Wenn aktiv, wird Wissen aus einer ZIP-Datei geladen. Relevant für vollständige Analyse und Prä-Analyse & Einstellungen; reine Postprocessing-Modi verwenden bestehende aiAudit-Daten.",
                 )
                 if not knowledge_default_exists:
                     st.caption("ℹ️ `knowledge.zip` nicht im Input-Ordner gefunden – Nutzung standardmäßig aus, manuelle Auswahl weiterhin möglich.")
@@ -615,7 +615,7 @@ def _build_args() -> SimpleNamespace:
         debug = bool(CONFIG["DEBUG"])
 
         if is_tuning_only:
-            st.info("Parameter-Einstellung: Es werden nur Datenquellen, API und Knowledge-Base angezeigt. Die Detailparameter werden durch die Analyse ermittelt und anschließend als Konfig gespeichert.")
+            st.info("Prä-Analyse & Einstellungen: Es werden nur Datenquellen, API und Knowledge-Base angezeigt. Die Detailparameter werden durch die Analyse ermittelt und anschließend als Konfig gespeichert.")
             enable_review_pass = bool(selected_profile.enable_review_pass)
             enable_reconstruction_pass = False
             enable_explainer_pass = True
@@ -905,7 +905,7 @@ def _build_args() -> SimpleNamespace:
                         key=f"{llm_provider}_knowledge_min_score",
                     )
                 else:
-                    st.caption("Parameter-Einstellung nutzt die Knowledge Base zur Analyse, zeigt aber keine Detailparameter an, weil diese vom Tuning-Lauf ermittelt und gespeichert werden.")
+                    st.caption("Prä-Analyse & Einstellungen nutzt die Knowledge Base zur Analyse, zeigt aber keine Detailparameter an, weil diese vom Tuning-Lauf ermittelt und gespeichert werden.")
                 knowledge_chunk_chars = st.number_input(
                     "Knowledge Chunk Chars",
                     min_value=200,
@@ -1095,7 +1095,7 @@ def main() -> None:
 
     args = _build_args()
 
-    start_label = "Parameter-Einstellung starten" if bool(getattr(args, "tuning_only", False)) else (("Explainer-Pass starten" if bool(getattr(args, "enable_explainer_pass", False)) and not bool(getattr(args, "enable_review_pass", False)) and not bool(getattr(args, "enable_reconstruction_pass", False)) else "Postprocessing starten") if bool(getattr(args, "postprocess_only", False)) else "Analyse starten")
+    start_label = "Prä-Analyse & Einstellungen starten" if bool(getattr(args, "tuning_only", False)) else (("Explainer-Pass starten" if bool(getattr(args, "enable_explainer_pass", False)) and not bool(getattr(args, "enable_review_pass", False)) and not bool(getattr(args, "enable_reconstruction_pass", False)) else "Postprocessing starten") if bool(getattr(args, "postprocess_only", False)) else "Analyse starten")
     start_button = st.button(start_label, type="primary", use_container_width=True)
 
     progress_bar = st.progress(0)
@@ -1213,8 +1213,8 @@ def main() -> None:
             show_live_step("autotune", "Speichere Parameter-Konfiguration …", progress=0.92, detail=target_cfg)
             from ai_exam_analyzer.io_utils import save_json
             save_json(target_cfg, tuning_payload)
-            show_live_step("autotune", "Parameter-Einstellung abgeschlossen.", progress=1.0, detail=target_cfg)
-            st.success(f"Parameter-Einstellung abgeschlossen. Konfig gespeichert: {target_cfg}")
+            show_live_step("autotune", "Prä-Analyse & Einstellungen abgeschlossen.", progress=1.0, detail=target_cfg)
+            st.success(f"Prä-Analyse & Einstellungen abgeschlossen. Konfig gespeichert: {target_cfg}")
             st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
             cost_total = (cost_estimate.get("total") or {})
             st.metric("Geschätzte Gesamtkosten", cost_total.get("costFormatted") or format_eur(float(cost_total.get("costEur") or 0.0)))
