@@ -1226,13 +1226,13 @@ def main() -> None:
                     "Gesamt": total_payload.get("costFormatted") or format_eur(float(total_payload.get("costEur") or 0.0)),
                     "Initialisierung": (by_stage.get("initialization_and_loading") or {}).get("costFormatted") or format_eur(0.0),
                     "Retrieval/Kontext": (by_stage.get("retrieval_and_context_building") or {}).get("costFormatted") or format_eur(0.0),
-                    "Basis A": (by_stage.get("base_pass_a") or {}).get("costFormatted") or format_eur(0.0),
-                    "Pass B geschätzt": (by_stage.get("base_pass_b_estimated") or {}).get("costFormatted") or format_eur(0.0),
-                    "Review/Pass C": (by_stage.get("review_pass_estimated") or {}).get("costFormatted") or format_eur(0.0),
+                    "Basis A": (by_stage.get("pass_a") or by_stage.get("base_pass_a") or {}).get("costFormatted") or format_eur(0.0),
+                    "Pass B geschätzt": (by_stage.get("pass_b") or by_stage.get("base_pass_b_estimated") or {}).get("costFormatted") or format_eur(0.0),
+                    "Review/Pass C": (by_stage.get("review") or by_stage.get("review_pass_estimated") or {}).get("costFormatted") or format_eur(0.0),
                     "Cluster-Refinement": (by_stage.get("abstraction_cluster_refinement") or {}).get("costFormatted") or format_eur(0.0),
                     "Repeat-Reconstruction": (by_stage.get("repeat_reconstruction") or {}).get("costFormatted") or format_eur(0.0),
-                    "Reconstruction": (by_stage.get("reconstruction_pass") or {}).get("costFormatted") or format_eur(0.0),
-                    "Explainer": (by_stage.get("explainer_pass") or {}).get("costFormatted") or format_eur(0.0),
+                    "Reconstruction": (by_stage.get("reconstruction") or by_stage.get("reconstruction_pass") or {}).get("costFormatted") or format_eur(0.0),
+                    "Explainer": (by_stage.get("explainer") or by_stage.get("explainer_pass") or {}).get("costFormatted") or format_eur(0.0),
                     "Output/Report": (by_stage.get("output_and_cost_report") or {}).get("costFormatted") or format_eur(0.0),
                 })
             if profile_rows:

@@ -4,6 +4,8 @@ import json
 import time
 from typing import Any, Dict, List, Optional, Union
 
+from ai_exam_analyzer.cost_tracking import add_usage_records, normalize_usage
+
 
 def is_reasoning_model(model: str) -> bool:
     """Heuristic: o-series + gpt-5* are treated as reasoning models (may reject temperature/top_p)."""
@@ -98,6 +100,21 @@ def call_json_schema(
                 return resp
         return resp
 
+    attempt_usages: List[Dict[str, int]] = []
+
+    def _capture_usage(resp: Any) -> Dict[str, int]:
+        usage = getattr(resp, "usage", None)
+        usage_dict = usage.model_dump() if hasattr(usage, "model_dump") else (usage if isinstance(usage, dict) else {})
+        normalized = normalize_usage(usage_dict)
+        if normalized["total_tokens"]:
+            attempt_usages.append(normalized)
+        return normalized
+
+    def _attach_total_usage(parsed: Dict[str, Any], usage: Dict[str, int]) -> Dict[str, Any]:
+        parsed["_llm_usage"] = add_usage_records(attempt_usages or [usage])
+        parsed["_llm_attempt_count"] = max(1, len(attempt_usages))
+        return parsed
+
     def _single_call(send_temperature: bool, tokens: int) -> Dict[str, Any]:
         params: Dict[str, Any] = {
             "model": model,
@@ -125,32 +142,17 @@ def call_json_schema(
 
         resp = client.responses.create(**params)
         resp = _poll_response_until_terminal(resp)
+        usage = _capture_usage(resp)
         status = str(getattr(resp, "status", ""))
         if status == "completed":
             parsed = _parse_json_from_response(resp)
-            usage = getattr(resp, "usage", None)
-            if usage is not None:
-                usage_dict = usage.model_dump() if hasattr(usage, "model_dump") else (usage if isinstance(usage, dict) else {})
-                parsed["_llm_usage"] = {
-                    "input_tokens": usage_dict.get("input_tokens") or usage_dict.get("prompt_tokens") or 0,
-                    "output_tokens": usage_dict.get("output_tokens") or usage_dict.get("completion_tokens") or 0,
-                    "total_tokens": usage_dict.get("total_tokens") or 0,
-                }
-            return parsed
+            return _attach_total_usage(parsed, usage)
 
         # Some providers occasionally mark responses as incomplete even though
         # the structured JSON is already parseable. Use it when possible.
         try:
             parsed = _parse_json_from_response(resp)
-            usage = getattr(resp, "usage", None)
-            if usage is not None:
-                usage_dict = usage.model_dump() if hasattr(usage, "model_dump") else (usage if isinstance(usage, dict) else {})
-                parsed["_llm_usage"] = {
-                    "input_tokens": usage_dict.get("input_tokens") or usage_dict.get("prompt_tokens") or 0,
-                    "output_tokens": usage_dict.get("output_tokens") or usage_dict.get("completion_tokens") or 0,
-                    "total_tokens": usage_dict.get("total_tokens") or 0,
-                }
-            return parsed
+            return _attach_total_usage(parsed, usage)
         except Exception:
             pass
 

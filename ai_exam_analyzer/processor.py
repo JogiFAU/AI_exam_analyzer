@@ -583,7 +583,10 @@ def process_questions(
     def record_cost(stage: str, model: str, result: Optional[Dict[str, Any]], question: Optional[Dict[str, Any]] = None, question_index: Optional[int] = None) -> Dict[str, Any]:
         nonlocal cost_sequence
         usage = (result or {}).pop("_llm_usage", None) if isinstance(result, dict) else None
+        attempt_count = (result or {}).pop("_llm_attempt_count", None) if isinstance(result, dict) else None
         record = make_cost_record(stage=stage, model=model, usage=usage)
+        if attempt_count is not None:
+            record["attemptCount"] = int(attempt_count or 0)
         cost_sequence += 1
         record["sequence"] = cost_sequence
         if question is not None:
@@ -1848,7 +1851,10 @@ def rerun_postprocessing_from_output(
     def emit_cost_progress(stage: str, model: str, result: Optional[Dict[str, Any]], question: Optional[Dict[str, Any]] = None, question_index: Optional[int] = None) -> None:
         nonlocal cost_sequence
         usage = (result or {}).pop("_llm_usage", None) if isinstance(result, dict) else None
+        attempt_count = (result or {}).pop("_llm_attempt_count", None) if isinstance(result, dict) else None
         record = make_cost_record(stage=stage, model=model, usage=usage)
+        if attempt_count is not None:
+            record["attemptCount"] = int(attempt_count or 0)
         cost_sequence += 1
         record["sequence"] = cost_sequence
         if question is not None:

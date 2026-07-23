@@ -138,23 +138,71 @@ def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], s
     avg_question_tokens = max(80, estimate_tokens_from_text(sample_text) // max(1, min(20, q_count)))
     knowledge_tokens = max(0, int(settings.get("knowledge_max_chars", 0) or 0) // 4)
     base_input = avg_question_tokens + knowledge_tokens + 900
-    pass_b_ratio = 0.55
-    review_ratio = 0.18
-    reconstruction_ratio = 1.0
-    explainer_ratio = 1.0
+
+    # Estimate run ratios from the same knobs that decide whether expensive LLM
+    # passes run in the processor. This keeps tuning totals aligned with enabled
+    # disabled cost points instead of pricing every optional pass unconditionally.
+    pass_b_ratio = max(0.10, min(0.95, 1.0 - float(settings.get("trigger_answer_conf", 0.82) or 0.82) + 0.37))
+    review_ratio = 0.0
+    if bool(settings.get("enable_review_pass", True)):
+        review_ratio = max(0.05, min(0.60, 0.45 - float(settings.get("low_conf_maintenance_threshold", 0.72) or 0.72) * 0.35))
+    reconstruction_ratio = 1.0 if bool(settings.get("enable_reconstruction_pass", True)) else 0.0
+    explainer_ratio = 1.0 if bool(settings.get("enable_explainer_pass", True)) else 0.0
+    cluster_refinement_ratio = 0.20 if bool(settings.get("enable_llm_abstraction_cluster_refinement", True)) else 0.0
+
+    def llm_or_disabled(stage: str, *, enabled: bool, model: str, input_tokens: int, output_tokens: int, disabled_note: str) -> Dict[str, Any]:
+        if enabled:
+            return make_cost_record(stage=stage, model=model, input_tokens=input_tokens, output_tokens=output_tokens, estimated=True)
+        return _zero_cost_stage(stage, note=disabled_note)
+
     records = [
         _zero_cost_stage("initialization_and_loading", note="Datei-/Schema-/Knowledge-Initialisierung; keine LLM-Tokens."),
         _zero_cost_stage("preprocessing_gates", note="Deterministische Qualitäts-/Gate-Prüfung; keine LLM-Tokens."),
         _zero_cost_stage("retrieval_and_context_building", note="Knowledge-Retrieval und Kontextaufbau; keine LLM-Tokens."),
-        make_cost_record(stage="base_pass_a", model=models.get("passA") or models.get("pass_a") or "gpt-5.4-nano", input_tokens=q_count * base_input, output_tokens=q_count * 900, estimated=True),
-        make_cost_record(stage="base_pass_b_estimated", model=models.get("passB") or models.get("pass_b") or models.get("passA") or "gpt-5.4-nano", input_tokens=int(q_count * pass_b_ratio * (base_input + 700)), output_tokens=int(q_count * pass_b_ratio * 750), estimated=True),
-        make_cost_record(stage="review_pass_estimated", model=models.get("review") or models.get("passB") or "gpt-5.4-nano", input_tokens=int(q_count * review_ratio * (base_input + 1200)), output_tokens=int(q_count * review_ratio * 900), estimated=True),
+        make_cost_record(stage="pass_a", model=models.get("passA") or models.get("pass_a") or "gpt-5.4-nano", input_tokens=q_count * base_input, output_tokens=q_count * 900, estimated=True),
+        llm_or_disabled(
+            "pass_b",
+            enabled=pass_b_ratio > 0,
+            model=models.get("passB") or models.get("pass_b") or models.get("passA") or "gpt-5.4-nano",
+            input_tokens=int(q_count * pass_b_ratio * (base_input + 700)),
+            output_tokens=int(q_count * pass_b_ratio * 750),
+            disabled_note="Pass B ist durch die Tuning-Parameter faktisch deaktiviert; keine LLM-Tokens.",
+        ),
+        llm_or_disabled(
+            "review",
+            enabled=review_ratio > 0,
+            model=models.get("review") or models.get("passB") or "gpt-5.4-nano",
+            input_tokens=int(q_count * review_ratio * (base_input + 1200)),
+            output_tokens=int(q_count * review_ratio * 900),
+            disabled_note="Review-Pass ist deaktiviert; keine LLM-Tokens.",
+        ),
         _zero_cost_stage("content_and_image_clustering", note="Deterministisches Text-/Bild-Clustering; keine LLM-Tokens."),
         _zero_cost_stage("abstraction_clustering", note="Deterministisches Abstraktions-Clustering; keine LLM-Tokens."),
-        make_cost_record(stage="abstraction_cluster_refinement", model=models.get("cluster_refinement") or models.get("clusterRefinement") or models.get("passA") or "gpt-5.4-nano", input_tokens=max(0, int(q_count * 0.20 * (base_input + 900))), output_tokens=max(0, int(q_count * 0.20 * 500)), estimated=True),
+        llm_or_disabled(
+            "abstraction_cluster_refinement",
+            enabled=cluster_refinement_ratio > 0,
+            model=models.get("cluster_refinement") or models.get("clusterRefinement") or models.get("passA") or "gpt-5.4-nano",
+            input_tokens=max(0, int(q_count * cluster_refinement_ratio * (base_input + 900))),
+            output_tokens=max(0, int(q_count * cluster_refinement_ratio * 500)),
+            disabled_note="LLM-Abstraktionscluster-Refinement ist deaktiviert; keine LLM-Tokens.",
+        ),
         _zero_cost_stage("repeat_reconstruction", note="Repeat-Reconstruction gleicht Frage-/Antwortmuster deterministisch über Cluster/Jahrgänge ab; keine LLM-Tokens."),
-        make_cost_record(stage="reconstruction_pass", model=models.get("reconstruction") or "gpt-5.4-nano", input_tokens=int(q_count * reconstruction_ratio * (base_input + 1000)), output_tokens=int(q_count * reconstruction_ratio * 1000), estimated=True),
-        make_cost_record(stage="explainer_pass", model=models.get("explainer") or models.get("passA") or "gpt-5.4-nano", input_tokens=int(q_count * explainer_ratio * (base_input + 800)), output_tokens=int(q_count * explainer_ratio * 1100), estimated=True),
+        llm_or_disabled(
+            "reconstruction",
+            enabled=reconstruction_ratio > 0,
+            model=models.get("reconstruction") or "gpt-5.4-nano",
+            input_tokens=int(q_count * reconstruction_ratio * (base_input + 1000)),
+            output_tokens=int(q_count * reconstruction_ratio * 1000),
+            disabled_note="Rekonstruktions-Pass ist deaktiviert; keine LLM-Tokens.",
+        ),
+        llm_or_disabled(
+            "explainer",
+            enabled=explainer_ratio > 0,
+            model=models.get("explainer") or models.get("passA") or "gpt-5.4-nano",
+            input_tokens=int(q_count * explainer_ratio * (base_input + 800)),
+            output_tokens=int(q_count * explainer_ratio * 1100),
+            disabled_note="Explainer-Pass ist deaktiviert; keine LLM-Tokens.",
+        ),
         _zero_cost_stage("output_and_cost_report", note="Ausgabe-/Kostenreport-Schreiben; keine LLM-Tokens."),
     ]
     summary = add_records(records)
@@ -162,11 +210,14 @@ def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], s
         "question_count": q_count,
         "avg_question_tokens": avg_question_tokens,
         "knowledge_tokens_per_question": knowledge_tokens,
-        "pass_b_run_ratio": pass_b_ratio,
-        "review_run_ratio": review_ratio,
+        "pass_b_run_ratio": round(pass_b_ratio, 4),
+        "review_run_ratio": round(review_ratio, 4),
+        "reconstruction_run_ratio": reconstruction_ratio,
+        "explainer_run_ratio": explainer_ratio,
+        "cluster_refinement_run_ratio": cluster_refinement_ratio,
         "currency": "EUR",
-        "all_passes_included": True,
-        "note": "Schätzung enthält alle Workflow-Pässe. Deterministische Pässe wie Repeat-Reconstruction haben 0 LLM-Tokens/0,00 €, weil sie keine Modellabfrage ausführen. LLM-Pässe werden per Zeichen-/Token-Heuristik, statischer Provider-Preistabelle und USD-EUR-Umrechnung geschätzt; tatsächliche Tokens werden im Lauf aus API-Usage getrackt.",
+        "all_cost_points_listed": True,
+        "note": "Schätzung listet alle Workflow-Kostenpunkte. Deaktivierte oder deterministische Schritte bleiben als 0-€-Records in der Aufschlüsselung sichtbar. LLM-Pässe werden per Zeichen-/Token-Heuristik, statischer Provider-Preistabelle und USD-EUR-Umrechnung geschätzt; tatsächliche Tokens werden im Lauf aus API-Usage inklusive Retry-Versuchen getrackt.",
     }
     return summary
 
