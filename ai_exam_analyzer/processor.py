@@ -1487,7 +1487,7 @@ def process_questions(
             message="Repeat-Reconstruction abgeschlossen.",
         )
 
-    if bool(getattr(args, "enable_reconstruction_pass", True)):
+    if bool(getattr(args, "enable_reconstruction_pass", False)):
         emit_progress(
             event="reconstruction_pass_started",
             stage="postprocessing",
@@ -1661,7 +1661,7 @@ def process_questions(
             message="Reconstruction-Pass abgeschlossen.",
         )
 
-    if bool(getattr(args, "enable_explainer_pass", False)):
+    if bool(getattr(args, "enable_explainer_pass", True)):
         emit_progress(
             event="explainer_pass_started",
             stage="postprocessing",
@@ -2054,7 +2054,7 @@ def rerun_postprocessing_from_output(
                     message=f"Review {i}/{total_questions} übersprungen (bereits vorhanden, Frage {qid}).",
                 )
 
-        if bool(getattr(args, "enable_reconstruction_pass", True)):
+        if bool(getattr(args, "enable_reconstruction_pass", False)):
             current_reconstruction = audit.get("reconstruction")
             should_rerun_reconstruction = bool(getattr(args, "force_rerun_reconstruction", False)) or not isinstance(current_reconstruction, dict) or ("error" in current_reconstruction)
             if should_rerun_reconstruction:
@@ -2153,7 +2153,7 @@ def rerun_postprocessing_from_output(
                 )
 
 
-        if bool(getattr(args, "enable_explainer_pass", False)):
+        if bool(getattr(args, "enable_explainer_pass", True)):
             current_explainer = audit.get("explainer")
             should_rerun_explainer = bool(getattr(args, "force_rerun_explainer", False)) or not isinstance(current_explainer, dict) or ("error" in current_explainer)
             if should_rerun_explainer:

@@ -49,10 +49,10 @@ CONFIG = {
     "REPEAT_MIN_ANCHOR_CONSENSUS": 1,
     "REPEAT_MIN_MATCH_RATIO": 0.6,
 
-    "ENABLE_RECONSTRUCTION_PASS": True,
+    "ENABLE_RECONSTRUCTION_PASS": False,
     "RECONSTRUCTION_MODEL": "gpt-5.5",
     "RECONSTRUCTION_MODEL_GEMINI": "gemini-3.1-pro-preview",
-    "ENABLE_EXPLAINER_PASS": False,
+    "ENABLE_EXPLAINER_PASS": True,
     "ENABLE_LLM_ABSTRACTION_CLUSTER_REFINEMENT": True,
     "CLUSTER_REFINEMENT_MODEL": "gpt-5.4-mini",
     "CLUSTER_REFINEMENT_MODEL_GEMINI": "gemini-3.5-flash",
@@ -63,4 +63,4 @@ CONFIG = {
     "EXPLAINER_MODEL_GEMINI": "gemini-3.5-flash",
 }
 
-PIPELINE_VERSION = "2pass-merged-v9-annotate-only-reconstruct-explain"
+PIPELINE_VERSION = "2pass-merged-v10-standard-explain-no-reconstruct"

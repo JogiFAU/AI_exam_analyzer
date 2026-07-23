@@ -104,6 +104,7 @@ def _profile_defaults_for_widgets(provider: str, profile_name: str) -> Dict[str,
         "knowledge_min_score": profile.knowledge_min_score,
         "enable_review_pass": profile.enable_review_pass,
         "enable_reconstruction_pass": profile.enable_reconstruction_pass,
+        "enable_explainer_pass": profile.enable_explainer_pass,
     }
 
 
@@ -605,7 +606,7 @@ def _build_args() -> SimpleNamespace:
         repeat_min_anchor_conf = float(CONFIG["REPEAT_MIN_ANCHOR_CONF"])
         repeat_min_anchor_consensus = int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"])
         repeat_min_match_ratio = float(CONFIG["REPEAT_MIN_MATCH_RATIO"])
-        enable_explainer_pass = bool(CONFIG["ENABLE_EXPLAINER_PASS"])
+        enable_explainer_pass = bool(selected_profile.enable_explainer_pass)
         explainer_model = str(default_explainer_model)
         write_top_level = bool(CONFIG["WRITE_TOP_LEVEL"])
         debug = bool(CONFIG["DEBUG"])
@@ -613,8 +614,8 @@ def _build_args() -> SimpleNamespace:
         if is_tuning_only:
             st.info("Parameter-Einstellung: Es werden nur Datenquellen, API und Knowledge-Base angezeigt. Die Detailparameter werden durch die Analyse ermittelt und anschließend als Konfig gespeichert.")
             enable_review_pass = bool(selected_profile.enable_review_pass)
-            enable_reconstruction_pass = bool(selected_profile.enable_reconstruction_pass)
-            enable_explainer_pass = False
+            enable_reconstruction_pass = False
+            enable_explainer_pass = True
         elif is_explainer_only:
             with st.expander("💬 Explainer", expanded=True):
                 enable_review_pass = False
@@ -721,7 +722,7 @@ def _build_args() -> SimpleNamespace:
                     )
                 enable_explainer_pass = st.checkbox(
                     "Explainer-Pass aktivieren",
-                    value=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
+                    value=bool(selected_profile.enable_explainer_pass),
                     key="enable_explainer_pass",
                     help="Erzeugt didaktische Erklärungen auf bestehendem aiAudit. Aktiv verbessert Nachvollziehbarkeit, erzeugt aber zusätzliche Modellkosten.",
                 )
@@ -843,7 +844,7 @@ def _build_args() -> SimpleNamespace:
                 repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, key="repeat_min_match_ratio", help="Mindestüberlappung zwischen Antworttexten von Anker und Ziel. Niedriger toleriert stärkere Umformulierungen, höher verlangt nahezu identische Antwortoptionen und reduziert Fehlübernahmen.", disabled=(not enable_repeat_reconstruction))
                 enable_explainer_pass = st.checkbox(
                     "Explainer-Pass aktivieren",
-                    value=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
+                    value=bool(selected_profile.enable_explainer_pass),
                     key="enable_explainer_pass",
                     help="Erzeugt eine didaktische Erklärung pro Frage im Audit. Aktiv liefert bessere Nachvollziehbarkeit für Lern-/Review-Zwecke, verursacht aber zusätzliche Modellkosten. Deaktiviert spart Kosten und Laufzeit.",
                 )

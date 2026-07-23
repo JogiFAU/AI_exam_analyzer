@@ -100,8 +100,9 @@ def _schema() -> Dict[str, Any]:
                     "knowledge_max_chars": {"type": "integer", "minimum": 500, "maximum": 12000},
                     "knowledge_min_score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
                     "enable_review_pass": {"type": "boolean"},
-                    "enable_reconstruction_pass": {"type": "boolean"},
+                    "enable_reconstruction_pass": {"type": "boolean", "enum": [False]},
                     "enable_repeat_reconstruction": {"type": "boolean"},
+                    "enable_explainer_pass": {"type": "boolean", "enum": [True]},
                 },
                 "required": [
                     "trigger_answer_conf",
@@ -114,6 +115,7 @@ def _schema() -> Dict[str, Any]:
                     "enable_review_pass",
                     "enable_reconstruction_pass",
                     "enable_repeat_reconstruction",
+                    "enable_explainer_pass",
                 ],
                 "additionalProperties": False,
             },
@@ -212,7 +214,7 @@ def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], s
     review_ratio = 0.0
     if bool(settings.get("enable_review_pass", True)):
         review_ratio = max(0.08, min(0.70, 0.55 - float(settings.get("low_conf_maintenance_threshold", 0.72) or 0.72) * 0.38))
-    reconstruction_ratio = 1.0 if bool(settings.get("enable_reconstruction_pass", True)) else 0.0
+    reconstruction_ratio = 1.0 if bool(settings.get("enable_reconstruction_pass", False)) else 0.0
     explainer_ratio = 1.0 if bool(settings.get("enable_explainer_pass", True)) else 0.0
     cluster_refinement_ratio = 0.30 if bool(settings.get("enable_llm_abstraction_cluster_refinement", True)) else 0.0
 
@@ -365,11 +367,9 @@ def _settings_for_profile(*, provider: str, profile_name: str, current: Dict[str
         "knowledge_max_chars": profile.knowledge_max_chars,
         "knowledge_min_score": profile.knowledge_min_score,
         "enable_review_pass": profile.enable_review_pass,
-        "enable_reconstruction_pass": profile.enable_reconstruction_pass,
+        "enable_reconstruction_pass": False,
         "enable_llm_abstraction_cluster_refinement": profile.enable_llm_abstraction_cluster_refinement,
-        # Keep explainer visible in tuning estimates by default; callers can
-        # explicitly set enable_explainer_pass=False to price a run without it.
-        "enable_explainer_pass": bool(current.get("enable_explainer_pass", True)),
+        "enable_explainer_pass": profile.enable_explainer_pass,
     }
 
 
@@ -417,6 +417,7 @@ def recommend_settings(*, provider: str, api_key: str, model: str, topic_tree: A
         "Wähle robuste Einstellungen für heterogene Datensätze mit Blick auf Qualität vor Aggressivität. "
         "Setze die Datensatzanalyse (dataset_stats + sample_questions) und die Knowledge-Analyse (knowledge_stats) explizit in Relation zur Workflow-Dokumentation. "
         "Optimiere insbesondere knowledge_top_k, knowledge_max_chars, knowledge_min_score passend zur beobachteten Retrieval-Qualität. "
+        "Aktiviere den teuren Reconstruction-Pass nicht; der Standard-Workflow nutzt stattdessen den didaktisch wertvollen Explainer-Pass. "
         "Nutze konservative Entscheidungen bei Unsicherheit und begründe parameterweise. "
         "Liefere kurze, konkrete Begründungen.\n\n"
         "=== Workflow-Kontextdokumentation ===\n"
@@ -435,14 +436,17 @@ def recommend_settings(*, provider: str, api_key: str, model: str, topic_tree: A
     )
     tuning_request_cost = make_cost_record(stage="auto_tuning_request", model=model, usage=out.pop("_llm_usage", None))
     settings = out.get("settings") or {}
+    # Auto-Tuning darf den teuren Reconstruction-Pass nicht mehr empfehlen;
+    # der Standard-Workflow erzeugt stattdessen didaktische Explainer.
+    settings["enable_reconstruction_pass"] = False
+    settings["enable_explainer_pass"] = True
     report = str(out.get("report_short") or "").strip()
     reasons = [str(x).strip() for x in (out.get("reasoning") or []) if str(x).strip()]
     if reasons:
         report = (report + "\n\n" if report else "") + "\n".join([f"- {x}" for x in reasons[:6]])
     effective_current = {**current}
-    # If the UI did not expose explainer during tuning, still estimate it so the
-    # user sees the cost impact of enabling that pass in the breakdown.
-    effective_current.setdefault("enable_explainer_pass", True)
+    effective_current["enable_reconstruction_pass"] = False
+    effective_current["enable_explainer_pass"] = True
     estimate = estimate_analysis_costs(provider=provider, questions=questions, settings={**effective_current, **settings}, models=models or {"passB": model})
     estimate["profileEstimates"] = estimate_quality_profile_costs(provider=provider, questions=questions, current={**effective_current, **settings})
     estimate["tuningRequest"] = tuning_request_cost

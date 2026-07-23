@@ -47,6 +47,7 @@ class QualityCostProfile:
     knowledge_min_score: float
     enable_review_pass: bool
     enable_reconstruction_pass: bool
+    enable_explainer_pass: bool
     enable_llm_abstraction_cluster_refinement: bool
 
 
@@ -55,16 +56,16 @@ class QualityCostProfile:
 # - Gemini: Gemini 3.1 Pro Preview (quality), Gemini 3.5 Flash (balanced price/performance), Gemini 3.1 Flash-Lite (cost).
 _PROVIDER_PROFILES: Dict[str, Dict[str, QualityCostProfile]] = {
     "openai": {
-        "highest_quality": QualityCostProfile("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-terra", 0.0, "xhigh", 0.86, 0.90, 0.86, 0.72, 10, 8000, 0.04, True, True, True),
-        "quality": QualityCostProfile("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-terra", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-luna", 0.0, "high", 0.82, 0.87, 0.82, 0.68, 8, 6000, 0.05, False, True, True),
-        "cost_optimized": QualityCostProfile("gpt-5.4-nano", "gpt-5.6-luna", "gpt-5.6-luna", "gpt-5.6-luna", "gpt-5.4-nano", "gpt-5.4-nano", 0.0, "medium", 0.78, 0.83, 0.78, 0.62, 5, 3200, 0.07, False, True, True),
-        "fully_cost_optimized": QualityCostProfile("gpt-5.4-nano", "gpt-5.4-nano", "gpt-5.4-nano", "gpt-5.4-nano", "gpt-5.4-nano", "gpt-5.4-nano", 0.0, "low", 0.72, 0.78, 0.74, 0.56, 3, 1800, 0.09, False, False, False),
+        "highest_quality": QualityCostProfile("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-terra", 0.0, "xhigh", 0.86, 0.90, 0.86, 0.72, 10, 8000, 0.04, True, False, True, True),
+        "quality": QualityCostProfile("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-terra", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-luna", 0.0, "high", 0.82, 0.87, 0.82, 0.68, 8, 6000, 0.05, False, False, True, True),
+        "cost_optimized": QualityCostProfile("gpt-5.4-nano", "gpt-5.6-luna", "gpt-5.6-luna", "gpt-5.6-luna", "gpt-5.4-nano", "gpt-5.4-nano", 0.0, "medium", 0.78, 0.83, 0.78, 0.62, 5, 3200, 0.07, False, False, True, True),
+        "fully_cost_optimized": QualityCostProfile("gpt-5.4-nano", "gpt-5.4-nano", "gpt-5.4-nano", "gpt-5.4-nano", "gpt-5.4-nano", "gpt-5.4-nano", 0.0, "low", 0.72, 0.78, 0.74, 0.56, 3, 1800, 0.09, False, False, True, False),
     },
     "gemini": {
-        "highest_quality": QualityCostProfile("gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.5-flash", 1.0, "high", 0.88, 0.91, 0.87, 0.74, 10, 9000, 0.035, True, True, True),
-        "quality": QualityCostProfile("gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.5-flash", 1.0, "medium", 0.84, 0.88, 0.84, 0.70, 8, 6500, 0.05, False, True, True),
-        "cost_optimized": QualityCostProfile("gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite", 1.0, "medium", 0.80, 0.85, 0.80, 0.65, 5, 3500, 0.07, False, True, True),
-        "fully_cost_optimized": QualityCostProfile("gemini-3.1-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite", 1.0, "low", 0.74, 0.80, 0.75, 0.58, 3, 2000, 0.09, False, False, False),
+        "highest_quality": QualityCostProfile("gemini-3.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview", "gemini-3.5-flash", "gemini-3.5-flash", 1.0, "high", 0.88, 0.91, 0.87, 0.74, 10, 9000, 0.035, True, False, True, True),
+        "quality": QualityCostProfile("gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.5-flash", 1.0, "medium", 0.84, 0.88, 0.84, 0.70, 8, 6500, 0.05, False, False, True, True),
+        "cost_optimized": QualityCostProfile("gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite", 1.0, "medium", 0.80, 0.85, 0.80, 0.65, 5, 3500, 0.07, False, False, True, True),
+        "fully_cost_optimized": QualityCostProfile("gemini-3.1-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite", "gemini-3.1-flash-lite", 1.0, "low", 0.74, 0.80, 0.75, 0.58, 3, 2000, 0.09, False, False, True, False),
     },
 }
 
@@ -104,6 +105,7 @@ def apply_quality_cost_profile(args: Any, *, include_optional_toggles: bool = Tr
     if include_optional_toggles:
         args.enable_review_pass = profile.enable_review_pass
         args.enable_reconstruction_pass = profile.enable_reconstruction_pass
+        args.enable_explainer_pass = profile.enable_explainer_pass
         args.enable_llm_abstraction_cluster_refinement = profile.enable_llm_abstraction_cluster_refinement
     return args
 
