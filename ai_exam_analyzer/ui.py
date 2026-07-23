@@ -283,11 +283,6 @@ def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir
 
 
 def _build_args() -> SimpleNamespace:
-    pending_widget_updates = st.session_state.pop("_pending_widget_updates", None)
-    if isinstance(pending_widget_updates, dict):
-        for key, value in pending_widget_updates.items():
-            st.session_state[key] = value
-
     if "data_folder" not in st.session_state:
         st.session_state["data_folder"] = _get_default_documents_dir()
     if "output_folder" not in st.session_state:
@@ -618,6 +613,31 @@ def _build_args() -> SimpleNamespace:
                 enable_review_pass = False
                 enable_reconstruction_pass = False
                 enable_explainer_pass = True
+                checkpoint_every = st.number_input(
+                    "Checkpoint alle N Fragen",
+                    min_value=1,
+                    value=int(CONFIG["CHECKPOINT_EVERY"]),
+                    key="checkpoint_every",
+                    help="Auch im Explainer-only-Modus werden Zwischenergebnisse geschrieben. Niedrigere Werte reduzieren Datenverlust bei Abbruch, höhere Werte schreiben seltener.",
+                )
+                text_cluster_similarity = st.slider(
+                    "Question-Cluster Similarity",
+                    0.0,
+                    1.0,
+                    float(CONFIG["TEXT_CLUSTER_SIMILARITY"]),
+                    0.01,
+                    key="text_cluster_similarity",
+                    help="Wird im Postprocessing-Kontext zur Aktualisierung von Frage-Clustern verwendet. Niedriger gruppiert mehr, höher ist strenger.",
+                )
+                abstraction_cluster_similarity = st.slider(
+                    "Abstraction-Cluster Similarity",
+                    0.0,
+                    1.0,
+                    float(CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"]),
+                    0.01,
+                    key="abstraction_cluster_similarity",
+                    help="Wird am Ende des Postprocessing-Laufs für Abstraktionscluster genutzt. Niedriger gruppiert breiter, höher trennt stärker.",
+                )
                 force_rerun_explainer = st.checkbox(
                     "Explainer immer neu berechnen",
                     value=True,
@@ -625,9 +645,40 @@ def _build_args() -> SimpleNamespace:
                 )
                 explainer_model = str(default_explainer_model)
                 st.caption(f"Explainer Modell: `{explainer_model}`")
+                write_top_level = st.checkbox(
+                    "Top-Level ai* Felder schreiben",
+                    value=CONFIG["WRITE_TOP_LEVEL"],
+                    key="write_top_level",
+                    help="Wird auch in Postprocessing-Läufen angewendet. Aktiv aktualisiert praktische ai*-Kurzfelder auf Fragenebene; deaktiviert verändert nur aiAudit und hält den Export schlanker.",
+                )
         elif is_postprocess_only:
             with st.expander("⚙️ Postprocessing", expanded=True):
-                st.caption("Nur Review, Reconstruction und optional Explainer werden angezeigt, weil Pass A/B, Bilder, Knowledge-Parameter, Repeat-Reconstruction und Laufsteuerung in diesem Modus nicht genutzt werden.")
+                st.caption("Angezeigt werden nur die im Postprocessing tatsächlich verwendeten Optionen: Checkpoints, Cluster-Aktualisierung, Review, Reconstruction, optional Explainer und Top-Level-Ausgabe.")
+                checkpoint_every = st.number_input(
+                    "Checkpoint alle N Fragen",
+                    min_value=1,
+                    value=int(CONFIG["CHECKPOINT_EVERY"]),
+                    key="checkpoint_every",
+                    help="Postprocessing speichert ebenfalls Zwischenergebnisse. Niedrigere Werte reduzieren Datenverlust bei Abbruch, höhere Werte schreiben seltener.",
+                )
+                text_cluster_similarity = st.slider(
+                    "Question-Cluster Similarity",
+                    0.0,
+                    1.0,
+                    float(CONFIG["TEXT_CLUSTER_SIMILARITY"]),
+                    0.01,
+                    key="text_cluster_similarity",
+                    help="Postprocessing aktualisiert Frage-Cluster. Niedrigere Werte gruppieren mehr Fragen zusammen, höhere Werte sind konservativer.",
+                )
+                abstraction_cluster_similarity = st.slider(
+                    "Abstraction-Cluster Similarity",
+                    0.0,
+                    1.0,
+                    float(CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"]),
+                    0.01,
+                    key="abstraction_cluster_similarity",
+                    help="Postprocessing aktualisiert Abstraktionscluster. Niedrigere Werte erlauben breitere Gruppen, höhere Werte trennen stärker.",
+                )
                 enable_review_pass = st.checkbox(
                     "Pass C (Deep Review) aktivieren",
                     value=bool(selected_profile.enable_review_pass),
@@ -675,6 +726,12 @@ def _build_args() -> SimpleNamespace:
                         value=False,
                         help="Erzwingt eine neue didaktische Erklärung. Aktiv ist sinnvoll bei geänderten Modellen oder Promptlogik, erhöht aber Kosten; deaktiviert erhält vorhandene Erklärungen.",
                     )
+                write_top_level = st.checkbox(
+                    "Top-Level ai* Felder schreiben",
+                    value=CONFIG["WRITE_TOP_LEVEL"],
+                    key="write_top_level",
+                    help="Postprocessing kann ai*-Kurzfelder aus dem aktualisierten aiAudit neu schreiben. Aktiv erleichtert Weiterverarbeitung; deaktiviert belässt Änderungen primär im aiAudit.",
+                )
         else:
             with st.expander("⚙️ Pipeline", expanded=False):
                 checkpoint_every = st.number_input(
@@ -1082,23 +1139,6 @@ def main() -> None:
             for key, value in recommendations.items():
                 if hasattr(args, key):
                     setattr(args, key, value)
-
-            provider_prefix = str(args.llm_provider)
-            state_map = {
-                "trigger_answer_conf": f"{provider_prefix}_trigger_answer_conf",
-                "trigger_topic_conf": f"{provider_prefix}_trigger_topic_conf",
-                "apply_change_min_conf_b": f"{provider_prefix}_apply_change_min_conf_b",
-                "low_conf_maintenance_threshold": f"{provider_prefix}_low_conf_maintenance_threshold",
-                "knowledge_top_k": f"{provider_prefix}_knowledge_top_k",
-                "knowledge_max_chars": f"{provider_prefix}_knowledge_max_chars",
-                "knowledge_min_score": f"{provider_prefix}_knowledge_min_score",
-            }
-            pending_updates: Dict[str, Any] = {}
-            for k, state_key in state_map.items():
-                if k in recommendations:
-                    pending_updates[state_key] = recommendations[k]
-            if pending_updates:
-                st.session_state["_pending_widget_updates"] = pending_updates
 
         if bool(getattr(args, "tuning_only", False)):
             if not auto_report:
