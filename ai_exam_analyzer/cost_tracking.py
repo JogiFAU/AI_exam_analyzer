@@ -18,7 +18,7 @@ MODEL_PRICING_USD_PER_1M: Dict[str, Dict[str, float]] = {
     "gemini-3.1-flash-lite": {"input": 0.1, "output": 0.4},
 }
 FALLBACK_PRICING_USD_PER_1M = {"input": 1.0, "output": 5.0}
-USD_TO_EUR_RATE = 0.92
+USD_TO_EUR_RATE = 0.8766  # ECB 2026-07-22: 1 EUR = 1.1408 USD
 
 
 def normalize_model_name(model: str) -> str:

@@ -124,6 +124,12 @@ def _schema() -> Dict[str, Any]:
     }
 
 
+def _zero_cost_stage(stage: str, *, note: str) -> Dict[str, Any]:
+    record = make_cost_record(stage=stage, model="deterministic", input_tokens=0, output_tokens=0, estimated=True)
+    record["note"] = note
+    return record
+
+
 def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], settings: Dict[str, Any], models: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     del provider
     models = models or {}
@@ -133,15 +139,23 @@ def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], s
     knowledge_tokens = max(0, int(settings.get("knowledge_max_chars", 0) or 0) // 4)
     base_input = avg_question_tokens + knowledge_tokens + 900
     pass_b_ratio = 0.55
-    review_ratio = 0.18 if bool(settings.get("enable_review_pass")) else 0.0
-    reconstruction_ratio = 1.0 if bool(settings.get("enable_reconstruction_pass")) else 0.0
-    explainer_ratio = 1.0 if bool(settings.get("enable_explainer_pass", True)) else 0.0
+    review_ratio = 0.18
+    reconstruction_ratio = 1.0
+    explainer_ratio = 1.0
     records = [
+        _zero_cost_stage("initialization_and_loading", note="Datei-/Schema-/Knowledge-Initialisierung; keine LLM-Tokens."),
+        _zero_cost_stage("preprocessing_gates", note="Deterministische Qualitäts-/Gate-Prüfung; keine LLM-Tokens."),
+        _zero_cost_stage("retrieval_and_context_building", note="Knowledge-Retrieval und Kontextaufbau; keine LLM-Tokens."),
         make_cost_record(stage="base_pass_a", model=models.get("passA") or models.get("pass_a") or "gpt-5.4-nano", input_tokens=q_count * base_input, output_tokens=q_count * 900, estimated=True),
         make_cost_record(stage="base_pass_b_estimated", model=models.get("passB") or models.get("pass_b") or models.get("passA") or "gpt-5.4-nano", input_tokens=int(q_count * pass_b_ratio * (base_input + 700)), output_tokens=int(q_count * pass_b_ratio * 750), estimated=True),
         make_cost_record(stage="review_pass_estimated", model=models.get("review") or models.get("passB") or "gpt-5.4-nano", input_tokens=int(q_count * review_ratio * (base_input + 1200)), output_tokens=int(q_count * review_ratio * 900), estimated=True),
+        _zero_cost_stage("content_and_image_clustering", note="Deterministisches Text-/Bild-Clustering; keine LLM-Tokens."),
+        _zero_cost_stage("abstraction_clustering", note="Deterministisches Abstraktions-Clustering; keine LLM-Tokens."),
+        make_cost_record(stage="abstraction_cluster_refinement", model=models.get("cluster_refinement") or models.get("clusterRefinement") or models.get("passA") or "gpt-5.4-nano", input_tokens=max(0, int(q_count * 0.20 * (base_input + 900))), output_tokens=max(0, int(q_count * 0.20 * 500)), estimated=True),
+        _zero_cost_stage("repeat_reconstruction", note="Repeat-Reconstruction gleicht Frage-/Antwortmuster deterministisch über Cluster/Jahrgänge ab; keine LLM-Tokens."),
         make_cost_record(stage="reconstruction_pass", model=models.get("reconstruction") or "gpt-5.4-nano", input_tokens=int(q_count * reconstruction_ratio * (base_input + 1000)), output_tokens=int(q_count * reconstruction_ratio * 1000), estimated=True),
         make_cost_record(stage="explainer_pass", model=models.get("explainer") or models.get("passA") or "gpt-5.4-nano", input_tokens=int(q_count * explainer_ratio * (base_input + 800)), output_tokens=int(q_count * explainer_ratio * 1100), estimated=True),
+        _zero_cost_stage("output_and_cost_report", note="Ausgabe-/Kostenreport-Schreiben; keine LLM-Tokens."),
     ]
     summary = add_records(records)
     summary["assumptions"] = {
@@ -151,7 +165,8 @@ def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], s
         "pass_b_run_ratio": pass_b_ratio,
         "review_run_ratio": review_ratio,
         "currency": "EUR",
-        "note": "Schätzung auf Zeichen-/Token-Heuristik, statischer Provider-Preistabelle und USD-EUR-Umrechnung; tatsächliche Tokens werden im Lauf aus API-Usage getrackt.",
+        "all_passes_included": True,
+        "note": "Schätzung enthält alle Workflow-Pässe. Deterministische Pässe wie Repeat-Reconstruction haben 0 LLM-Tokens/0,00 €, weil sie keine Modellabfrage ausführen. LLM-Pässe werden per Zeichen-/Token-Heuristik, statischer Provider-Preistabelle und USD-EUR-Umrechnung geschätzt; tatsächliche Tokens werden im Lauf aus API-Usage getrackt.",
     }
     return summary
 
@@ -164,6 +179,7 @@ def _models_for_profile(*, provider: str, profile_name: str) -> Dict[str, str]:
         "review": profile.review_model,
         "reconstruction": profile.reconstruction_model,
         "explainer": profile.explainer_model,
+        "cluster_refinement": profile.cluster_refinement_model,
     }
 
 
@@ -180,6 +196,7 @@ def _settings_for_profile(*, provider: str, profile_name: str, current: Dict[str
         "knowledge_min_score": profile.knowledge_min_score,
         "enable_review_pass": profile.enable_review_pass,
         "enable_reconstruction_pass": profile.enable_reconstruction_pass,
+        "enable_llm_abstraction_cluster_refinement": profile.enable_llm_abstraction_cluster_refinement,
         # Keep explainer visible in tuning estimates by default; callers can
         # explicitly set enable_explainer_pass=False to price a run without it.
         "enable_explainer_pass": bool(current.get("enable_explainer_pass", True)),

@@ -1023,6 +1023,23 @@ def _build_args() -> SimpleNamespace:
     )
 
 
+def _settings_payload_from_args(args: Any) -> Dict[str, Any]:
+    """Persist every UI/configurable analysis value except secrets."""
+    out: Dict[str, Any] = {}
+    for key, value in vars(args).items():
+        if key == "api_key":
+            continue
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            out[key] = value
+        elif isinstance(value, list):
+            out[key] = list(value)
+        elif isinstance(value, dict):
+            out[key] = dict(value)
+        else:
+            out[key] = str(value)
+    return out
+
+
 def _prepare_image_store(args: SimpleNamespace) -> Optional[QuestionImageStore]:
     if not args.images_zip:
         return None
@@ -1148,18 +1165,7 @@ def main() -> None:
         auto_report: Optional[str] = None
         if bool(getattr(args, "tuning_only", False)) and not bool(getattr(args, "postprocess_only", False)):
             show_live_step("autotune", "Analysiere Datensatzprofil, Retrieval-Qualität und Beispiel-Fragen …", progress=0.50)
-            current_settings = {
-                "trigger_answer_conf": float(args.trigger_answer_conf),
-                "trigger_topic_conf": float(args.trigger_topic_conf),
-                "apply_change_min_conf_b": float(args.apply_change_min_conf_b),
-                "low_conf_maintenance_threshold": float(args.low_conf_maintenance_threshold),
-                "knowledge_top_k": int(args.knowledge_top_k),
-                "knowledge_max_chars": int(args.knowledge_max_chars),
-                "knowledge_min_score": float(args.knowledge_min_score),
-                "enable_review_pass": bool(args.enable_review_pass),
-                "enable_reconstruction_pass": bool(args.enable_reconstruction_pass),
-                "enable_repeat_reconstruction": bool(args.enable_repeat_reconstruction),
-            }
+            current_settings = _settings_payload_from_args(args)
             show_live_step("autotune", "Frage Modell nach robusten Parametern und Kostenabschätzung …", progress=0.62, detail=args.passB_model or args.passA_model)
             recommendations, auto_report, cost_estimate = recommend_settings(
                 provider=args.llm_provider,
@@ -1188,19 +1194,7 @@ def main() -> None:
             tuning_payload = {
                 "llm_provider": args.llm_provider,
                 "created_from_input": args.input,
-                "settings": {
-                    "quality_cost_profile": args.quality_cost_profile,
-                    "trigger_answer_conf": float(args.trigger_answer_conf),
-                    "trigger_topic_conf": float(args.trigger_topic_conf),
-                    "apply_change_min_conf_b": float(args.apply_change_min_conf_b),
-                    "low_conf_maintenance_threshold": float(args.low_conf_maintenance_threshold),
-                    "knowledge_top_k": int(args.knowledge_top_k),
-                    "knowledge_max_chars": int(args.knowledge_max_chars),
-                    "knowledge_min_score": float(args.knowledge_min_score),
-                    "enable_review_pass": bool(args.enable_review_pass),
-                    "enable_reconstruction_pass": bool(args.enable_reconstruction_pass),
-                    "enable_repeat_reconstruction": bool(args.enable_repeat_reconstruction),
-                },
+                "settings": _settings_payload_from_args(args),
                 "report": auto_report,
                 "cost_estimate": cost_estimate,
             }
@@ -1223,14 +1217,20 @@ def main() -> None:
                     "Voreinstellung": payload.get("label") or profile_name,
                     "Profil-Key": profile_name,
                     "Gesamt": total_payload.get("costFormatted") or format_eur(float(total_payload.get("costEur") or 0.0)),
+                    "Initialisierung": (by_stage.get("initialization_and_loading") or {}).get("costFormatted") or format_eur(0.0),
+                    "Retrieval/Kontext": (by_stage.get("retrieval_and_context_building") or {}).get("costFormatted") or format_eur(0.0),
                     "Basis A": (by_stage.get("base_pass_a") or {}).get("costFormatted") or format_eur(0.0),
                     "Pass B geschätzt": (by_stage.get("base_pass_b_estimated") or {}).get("costFormatted") or format_eur(0.0),
-                    "Review": (by_stage.get("review_pass_estimated") or {}).get("costFormatted") or format_eur(0.0),
+                    "Review/Pass C": (by_stage.get("review_pass_estimated") or {}).get("costFormatted") or format_eur(0.0),
+                    "Cluster-Refinement": (by_stage.get("abstraction_cluster_refinement") or {}).get("costFormatted") or format_eur(0.0),
+                    "Repeat-Reconstruction": (by_stage.get("repeat_reconstruction") or {}).get("costFormatted") or format_eur(0.0),
                     "Reconstruction": (by_stage.get("reconstruction_pass") or {}).get("costFormatted") or format_eur(0.0),
                     "Explainer": (by_stage.get("explainer_pass") or {}).get("costFormatted") or format_eur(0.0),
+                    "Output/Report": (by_stage.get("output_and_cost_report") or {}).get("costFormatted") or format_eur(0.0),
                 })
             if profile_rows:
                 st.subheader("Kostenvergleich aller Voreinstellungen")
+                st.caption("Repeat-Reconstruction ist ein deterministischer Abgleich wiederholter Frage-/Antwortmuster über Cluster/Jahrgänge; deshalb entstehen dafür keine LLM-Tokens, der Pass wird aber bewusst in der Aufschlüsselung gezeigt.")
                 st.dataframe(profile_rows, use_container_width=True, hide_index=True)
             st.json(cost_estimate)
             return
