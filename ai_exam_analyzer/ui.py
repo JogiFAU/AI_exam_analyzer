@@ -8,7 +8,7 @@ import streamlit as st
 
 from ai_exam_analyzer.config import CONFIG
 from ai_exam_analyzer.image_store import QuestionImageStore
-from ai_exam_analyzer.io_utils import load_json
+from ai_exam_analyzer.io_utils import load_json, save_json
 from ai_exam_analyzer.model_profiles import (
     QUALITY_PROFILE_LABELS,
     QUALITY_PROFILE_OPTIONS,
@@ -123,8 +123,28 @@ def _apply_settings_to_ui_state(settings: Dict[str, Any]) -> None:
     merged.update(settings)
 
     key_map = {
+        "resume": "resume",
+        "limit": "limit",
+        "checkpoint_every": "checkpoint_every",
+        "sleep": "sleep_seconds",
+        "text_cluster_similarity": "text_cluster_similarity",
+        "abstraction_cluster_similarity": "abstraction_cluster_similarity",
+        "review_min_maintenance_severity": "review_min_maintenance_severity",
+        "enable_repeat_reconstruction": "enable_repeat_reconstruction",
+        "auto_apply_repeat_reconstruction": "auto_apply_repeat_reconstruction",
+        "repeat_min_similarity": "repeat_min_similarity",
+        "repeat_min_anchor_conf": "repeat_min_anchor_conf",
+        "repeat_min_anchor_consensus": "repeat_min_anchor_consensus",
+        "repeat_min_match_ratio": "repeat_min_match_ratio",
+        "enable_explainer_pass": "enable_explainer_pass",
+        "write_top_level": "write_top_level",
+        "debug": "debug",
+        "knowledge_subject_hint": "knowledge_subject_hint",
+        "knowledge_chunk_chars": "knowledge_chunk_chars",
         "pass_a_temperature": f"{provider}_pass_a_temperature",
+        "passA_temperature": f"{provider}_pass_a_temperature",
         "pass_b_reasoning_effort": f"{provider}_pass_b_reasoning_effort",
+        "passB_reasoning_effort": f"{provider}_pass_b_reasoning_effort",
         "trigger_answer_conf": f"{provider}_trigger_answer_conf",
         "trigger_topic_conf": f"{provider}_trigger_topic_conf",
         "apply_change_min_conf_b": f"{provider}_apply_change_min_conf_b",
@@ -138,6 +158,8 @@ def _apply_settings_to_ui_state(settings: Dict[str, Any]) -> None:
     for cfg_key, state_key in key_map.items():
         if cfg_key in merged:
             st.session_state[state_key] = merged[cfg_key]
+    if "only_question_ids" in merged and isinstance(merged["only_question_ids"], list):
+        st.session_state["only_question_ids_raw"] = ", ".join(str(x) for x in merged["only_question_ids"])
 
 
 def _sync_profile_defaults_when_changed(provider: str, profile_name: str) -> None:
@@ -368,7 +390,8 @@ def _build_args() -> SimpleNamespace:
             only_question_ids_raw = st.text_input(
                 "Nur diese Frage-ID(s) verarbeiten (optional)",
                 value="",
-                help="Kommagetrennte IDs; leer = alle Fragen.",
+                key="only_question_ids_raw",
+                help="Kommagetrennte IDs; leer = alle Fragen. Wenige IDs sind hilfreich für Tests oder Nachläufe; leer verarbeitet den gesamten Datensatz.",
             )
             analysis_config_default_name = "analysis_config.json"
             analysis_config_path = _file_picker_row(
@@ -492,7 +515,7 @@ def _build_args() -> SimpleNamespace:
                 options=["openai", "gemini"],
                 index=0 if CONFIG["LLM_PROVIDER"] == "openai" else 1,
                 key="llm_provider",
-                help="Wählt den verwendeten Modellanbieter für den gesamten Workflow.",
+                help="Wählt den Modellanbieter für alle KI-Schritte. OpenAI und Gemini verwenden unterschiedliche Modellnamen, Kostenstrukturen und Kontextfenster. Ein Wechsel setzt provider-spezifische Profildefaults; danach können die angezeigten Parameter weiter angepasst werden.",
             )
             key_env = "OPENAI_API_KEY" if llm_provider == "openai" else "GEMINI_API_KEY"
             api_key_value = os.getenv(key_env, "")
@@ -500,7 +523,7 @@ def _build_args() -> SimpleNamespace:
                 f"{llm_provider.title()} API Key",
                 type="password",
                 value=api_key_value,
-                help="API-Key für den Zugriff auf die gewählten Modelle.",
+                help="API-Key für den Zugriff auf den gewählten Provider. Der Key wird für diese Sitzung als Umgebungsvariable gesetzt, aber nicht in gespeicherte UI-Konfigurationen geschrieben.",
             )
             profile_default = str(CONFIG.get("QUALITY_COST_PROFILE", "quality"))
             profile_default_index = QUALITY_PROFILE_OPTIONS.index(profile_default) if profile_default in QUALITY_PROFILE_OPTIONS else 1
@@ -510,7 +533,7 @@ def _build_args() -> SimpleNamespace:
                 index=profile_default_index,
                 key="quality_cost_profile",
                 format_func=lambda value: QUALITY_PROFILE_LABELS.get(value, value),
-                help="Wählt ein abgestimmtes Start-Set aus Modellen, Reasoning-Aufwand, Confidence-Schwellen und Knowledge-Budget. Danach bleiben die Detailwerte manuell anpassbar.",
+                help="Wählt ein abgestimmtes Start-Set aus Modellen, Reasoning-Aufwand, Confidence-Schwellen, Knowledge-Budget und optionalen teuren Schritten. Richtung Qualität nutzt stärkere Modelle und mehr Kontext, kostet aber mehr. Richtung Kostenoptimierung reduziert Modellstärke, Reasoning und Kontext; danach bleiben die Detailwerte manuell anpassbar.",
             )
             _sync_profile_defaults_when_changed(llm_provider, quality_cost_profile)
             selected_profile = get_quality_cost_profile(provider=llm_provider, profile=quality_cost_profile)
@@ -540,7 +563,8 @@ def _build_args() -> SimpleNamespace:
                 "Checkpoint alle N Fragen",
                 min_value=1,
                 value=int(CONFIG["CHECKPOINT_EVERY"]),
-                help="Speichert regelmäßig Zwischenergebnisse.",
+                key="checkpoint_every",
+                help="Speichert regelmäßig Zwischenergebnisse. Niedrigere Werte reduzieren Datenverlust bei Abbruch, erzeugen aber mehr Schreibzugriffe. Höhere Werte sind etwas schneller, riskieren aber größere Wiederholungen nach Fehlern.",
             )
 
             text_cluster_similarity = st.slider(
@@ -549,7 +573,8 @@ def _build_args() -> SimpleNamespace:
                 1.0,
                 float(CONFIG["TEXT_CLUSTER_SIMILARITY"]),
                 0.01,
-                help="Ähnlichkeitsschwelle für inhaltliche Frage-Cluster (Jaccard).",
+                key="text_cluster_similarity",
+                help="Ähnlichkeitsschwelle für inhaltliche Frage-Cluster. Niedrigere Werte gruppieren mehr Fragen zusammen und können Wiederholungen stärker nutzen, riskieren aber falsche Cluster. Höhere Werte sind strenger und sicherer, finden aber weniger verwandte Fragen.",
             )
             abstraction_cluster_similarity = st.slider(
                 "Abstraction-Cluster Similarity",
@@ -557,7 +582,8 @@ def _build_args() -> SimpleNamespace:
                 1.0,
                 float(CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"]),
                 0.01,
-                help="Ähnlichkeitsschwelle für Cluster der Frageabstraktionen.",
+                key="abstraction_cluster_similarity",
+                help="Ähnlichkeitsschwelle für Cluster der abstrahierten Fragen. Niedrigere Werte erlauben breitere thematische Gruppen; höhere Werte halten Cluster enger und reduzieren falsch zusammengeführte Themen.",
             )
 
             enable_review_pass = st.checkbox(
@@ -572,7 +598,8 @@ def _build_args() -> SimpleNamespace:
                 "Pass C ab Wartungs-Severity",
                 options=[1, 2, 3],
                 value=int(CONFIG["REVIEW_MIN_MAINTENANCE_SEVERITY"]),
-                help="Pass C läuft nur ab diesem Wartungs-Schweregrad.",
+                key="review_min_maintenance_severity",
+                help="Pass C läuft nur ab diesem Wartungs-Schweregrad. Niedrigere Werte prüfen mehr Fragen gründlich und erhöhen Qualität/Kosten. Höhere Werte beschränken den teuren Review auf kritischere Fälle.",
                 disabled=not enable_review_pass,
             )
 
@@ -594,11 +621,13 @@ def _build_args() -> SimpleNamespace:
                 force_rerun_review = st.checkbox(
                     "Review immer neu berechnen",
                     value=False,
+                    help="Erzwingt im Postprocessing-Modus eine Neuberechnung des Review-Passes, auch wenn bereits ein Ergebnis vorliegt. Aktiv ist sinnvoll nach Parameter-/Modelländerungen, kostet aber zusätzliche API-Aufrufe.",
                     disabled=(is_explainer_only or not enable_review_pass),
                 )
                 force_rerun_reconstruction = st.checkbox(
                     "Reconstruction immer neu berechnen",
                     value=False,
+                    help="Erzwingt im Postprocessing-Modus eine neue Reconstruction-Bewertung. Aktiv aktualisiert alte Ergebnisse zuverlässig, deaktiviert spart Kosten und berechnet nur fehlende/fehlerhafte Einträge.",
                     disabled=(is_explainer_only or not enable_reconstruction_pass),
                 )
                 enable_explainer_pass = True if is_explainer_only else st.checkbox(
@@ -609,6 +638,7 @@ def _build_args() -> SimpleNamespace:
                 force_rerun_explainer = st.checkbox(
                     "Explainer immer neu berechnen",
                     value=is_explainer_only,
+                    help="Erzwingt eine neue didaktische Erklärung. Aktiv ist sinnvoll bei geänderten Modellen oder Promptlogik, erhöht aber Kosten; deaktiviert erhält vorhandene Erklärungen.",
                     disabled=not enable_explainer_pass,
                 )
                 explainer_model = str(default_explainer_model)
@@ -636,14 +666,15 @@ def _build_args() -> SimpleNamespace:
                 write_top_level = bool(CONFIG["WRITE_TOP_LEVEL"])
                 debug = bool(CONFIG["DEBUG"])
             else:
-                resume = st.checkbox("Resume aktiv", value=CONFIG["RESUME"], help="Überspringt bereits abgeschlossene Fragen.")
-                limit = st.number_input("Limit (0 = alle Fragen)", min_value=0, value=int(CONFIG["LIMIT"]), help="Begrenzt die Anzahl verarbeiteter Fragen.")
+                resume = st.checkbox("Resume aktiv", value=CONFIG["RESUME"], key="resume", help="Überspringt bereits abgeschlossene Fragen mit passender Pipeline-Version. Aktiv spart Kosten bei Fortsetzungen; deaktiviert erzwingt eine vollständige Neuberechnung und kann bestehende KI-Annotationen aktualisieren.")
+                limit = st.number_input("Limit (0 = alle Fragen)", min_value=0, value=int(CONFIG["LIMIT"]), key="limit", help="Begrenzt die Anzahl verarbeiteter Fragen. 0 verarbeitet alles. Kleine Werte eignen sich für kostengünstige Testläufe; höhere Werte bzw. 0 führen den kompletten Workflow aus.")
                 sleep_seconds = st.number_input(
                     "Pause je Frage (Sek.)",
                     min_value=0.0,
                     value=float(CONFIG["SLEEP"]),
                     step=0.05,
-                    help="Kurze Pause zwischen zwei API-Aufrufen.",
+                    key="sleep_seconds",
+                    help="Kurze Pause zwischen zwei API-Aufrufen. Höhere Werte schonen Rate-Limits und reduzieren temporäre API-Fehler, verlängern aber die Laufzeit. Niedrigere Werte sind schneller, können bei großen Datensätzen aber eher Rate-Limits treffen.",
                 )
                 pass_a_model = str(default_pass_a_model)
                 pass_b_model = str(default_pass_b_model)
@@ -665,31 +696,35 @@ def _build_args() -> SimpleNamespace:
                     key=f"{llm_provider}_pass_b_reasoning_effort",
                     help="Rechenaufwand für Pass B. Das Prioritätsprofil setzt nur den Startwert.",
                 )
-                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf")
-                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf")
-                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b")
-                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold")
+                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf", help="Antwort-Confidence unterhalb dieser Schwelle löst Pass B aus. Niedrigere Werte sparen Kosten, weil weniger Fälle verifiziert werden, riskieren aber unerkannte Fehler. Höhere Werte prüfen mehr unsichere Antworten und verbessern Qualität auf Kosten zusätzlicher API-Aufrufe.")
+                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf", help="Topic-Confidence unterhalb dieser Schwelle löst Pass B aus. Niedriger ist kostenorientierter und akzeptiert mehr Pass-A-Zuordnungen. Höher ist qualitätsorientierter und überprüft mehr potenziell falsche Topic-Zuweisungen.")
+                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b", help="Mindestvertrauen, ab dem Pass-B-Korrekturen automatisch übernommen werden. Niedrigere Werte übernehmen mehr Änderungen, auch riskantere. Höhere Werte sind konservativer und lassen zweifelhafte Änderungen eher als Audit-Hinweis stehen.")
+                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold", help="Unterhalb dieser Gesamt-Confidence wird eine Frage als Wartungskandidat markiert. Niedrigere Werte erzeugen weniger Warnungen, können Problemfälle übersehen. Höhere Werte markieren mehr Fragen zur Prüfung und erhöhen die Review-Last.")
 
                 enable_repeat_reconstruction = st.checkbox(
                     "Repeat-Reconstruction aktivieren",
                     value=bool(CONFIG["ENABLE_REPEAT_RECONSTRUCTION"]),
-                    help="Erkennt wiederholte Fragen über Jahrgänge und ergänzt entsprechende Audit-Signale.",
+                    key="enable_repeat_reconstruction",
+                    help="Erkennt wiederholte Fragen über Jahrgänge und ergänzt entsprechende Audit-Signale. Aktiv kann Qualität verbessern und Kosten sparen, weil Muster genutzt werden. Deaktiviert vermeidet falsche Wiederholungsannahmen bei sehr heterogenen Datensätzen.",
                     disabled=auto_dataset_tuning,
                 )
                 auto_apply_repeat_reconstruction = st.checkbox(
                     "Repeat-Reconstruction Auto-Apply (nur Audit-Suggestion)",
                     value=bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"]),
+                    key="auto_apply_repeat_reconstruction",
+                    help="Wendet sichere Repeat-Reconstruction-Vorschläge automatisch als Audit-Suggestion an. Aktiv spart manuelle Prüfung bei klaren Wiederholungen; deaktiviert hält alle Vorschläge rein informativ.",
                     disabled=(not enable_repeat_reconstruction),
                 )
-                repeat_min_similarity = st.slider("Repeat: Min Similarity", 0.0, 1.0, float(CONFIG["REPEAT_MIN_SIMILARITY"]), 0.01, disabled=(not enable_repeat_reconstruction))
-                repeat_min_anchor_conf = st.slider("Repeat: Min Anchor Confidence", 0.0, 1.0, float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]), 0.01, disabled=(not enable_repeat_reconstruction))
-                repeat_min_anchor_consensus = st.number_input("Repeat: Min Anchor Consensus", min_value=1, value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]), step=1, disabled=(not enable_repeat_reconstruction))
-                repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, disabled=(not enable_repeat_reconstruction))
+                repeat_min_similarity = st.slider("Repeat: Min Similarity", 0.0, 1.0, float(CONFIG["REPEAT_MIN_SIMILARITY"]), 0.01, key="repeat_min_similarity", help="Mindestähnlichkeit, ab der Fragen als Wiederholungs-Kandidaten gelten. Niedrigere Werte finden mehr Kandidaten, riskieren aber falsche Matches. Höhere Werte sind sicherer, übersehen aber abgewandelte Wiederholungen.", disabled=(not enable_repeat_reconstruction))
+                repeat_min_anchor_conf = st.slider("Repeat: Min Anchor Confidence", 0.0, 1.0, float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]), 0.01, key="repeat_min_anchor_conf", help="Mindestvertrauen für Ankerfragen, deren bekannte Bewertung Wiederholungen stützen darf. Niedriger nutzt mehr Anker, aber mit höherem Fehlerrisiko. Höher nutzt nur sehr sichere Anker und ist konservativer.", disabled=(not enable_repeat_reconstruction))
+                repeat_min_anchor_consensus = st.number_input("Repeat: Min Anchor Consensus", min_value=1, value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]), step=1, key="repeat_min_anchor_consensus", help="Mindestanzahl unabhängiger Anker, die dieselbe Richtung stützen müssen. Niedrigere Werte sind sensitiver und günstiger; höhere Werte erhöhen Sicherheit, benötigen aber mehr passende Wiederholungen.", disabled=(not enable_repeat_reconstruction))
+                repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, key="repeat_min_match_ratio", help="Mindestüberlappung zwischen Antworttexten von Anker und Ziel. Niedriger toleriert stärkere Umformulierungen, höher verlangt nahezu identische Antwortoptionen und reduziert Fehlübernahmen.", disabled=(not enable_repeat_reconstruction))
 
                 enable_explainer_pass = st.checkbox(
                     "Explainer-Pass aktivieren",
                     value=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
-                    help="Erzeugt eine didaktische Erklärung pro Frage im Audit.",
+                    key="enable_explainer_pass",
+                    help="Erzeugt eine didaktische Erklärung pro Frage im Audit. Aktiv liefert bessere Nachvollziehbarkeit für Lern-/Review-Zwecke, verursacht aber zusätzliche Modellkosten. Deaktiviert spart Kosten und Laufzeit.",
                 )
                 explainer_model = str(default_explainer_model)
                 st.caption(f"Explainer Modell: `{explainer_model}`")
@@ -697,13 +732,15 @@ def _build_args() -> SimpleNamespace:
                 write_top_level = st.checkbox(
                     "Top-Level ai* Felder schreiben",
                     value=CONFIG["WRITE_TOP_LEVEL"],
-                    help="Schreibt zusätzliche ai*-Felder direkt in jede Frage.",
+                    key="write_top_level",
+                    help="Schreibt zusätzliche ai*-Felder direkt in jede Frage. Aktiv erleichtert Export/Weiterverarbeitung. Deaktiviert hält die Ausgabe schlanker und belässt Details primär im aiAudit.",
                     disabled=auto_dataset_tuning,
                 )
                 debug = st.checkbox(
                     "Debug-Rohdaten speichern",
                     value=CONFIG["DEBUG"],
-                    help="Speichert detaillierte Rohantworten unter aiAudit._debug.",
+                    key="debug",
+                    help="Speichert detaillierte Rohantworten unter aiAudit._debug. Aktiv hilft bei Fehlersuche und Qualitätsprüfung, vergrößert aber Ausgaben und kann sensible Prompt-/Antwortdetails enthalten. Deaktiviert ist schlanker.",
                     disabled=auto_dataset_tuning,
                 )
 
@@ -712,14 +749,14 @@ def _build_args() -> SimpleNamespace:
             knowledge_subject_hint = st.text_input(
                 "Subject Hint",
                 key="knowledge_subject_hint",
-                help="Standard wird aus dem Topic-Tree übernommen; kann hier manuell überschrieben werden.",
+                help="Fach-/Themenhinweis für die Knowledge-Base-Suche. Ein präziser Hinweis kann Retrieval-Treffer verbessern. Ein falscher oder zu enger Hinweis kann relevante Belege verdrängen; leer nutzt automatische Ableitung aus dem Topic-Tree.",
             )
             knowledge_top_k = st.number_input(
                 "Knowledge Top-K",
                 min_value=1,
                 value=int(kb_budget_defaults.knowledge_top_k),
                 key=f"{llm_provider}_knowledge_top_k",
-                help="Anzahl der Beleg-Chunks pro Frage. Das Prioritätsprofil setzt nur den Startwert.",
+                help="Anzahl der Knowledge-Belege pro Frage. Höhere Werte geben dem Modell mehr Kontext und können die fachliche Sicherheit erhöhen, vergrößern aber Prompts und Kosten. Niedrigere Werte sparen Tokens und reduzieren Rauschen, können aber relevante Belege auslassen.",
             )
             knowledge_max_chars = st.number_input(
                 "Knowledge Max Chars",
@@ -727,7 +764,7 @@ def _build_args() -> SimpleNamespace:
                 value=int(kb_budget_defaults.knowledge_max_chars),
                 key=f"{llm_provider}_knowledge_max_chars",
                 step=100,
-                help="Maximale Gesamtlänge der übergebenen Belege. Das Prioritätsprofil setzt nur den Startwert.",
+                help="Maximale Gesamtlänge aller Knowledge-Belege pro Frage. Höhere Werte erlauben ausführlicheren Kontext, erhöhen aber Tokenverbrauch und potenziell Ablenkung. Niedrigere Werte sind günstiger und fokussierter, riskieren aber abgeschnittene Begründungen.",
             )
             knowledge_min_score = st.slider(
                 "Knowledge Min Score",
@@ -735,7 +772,7 @@ def _build_args() -> SimpleNamespace:
                 1.0,
                 float(kb_budget_defaults.knowledge_min_score),
                 0.01,
-                help="Mindestrelevanz eines Chunks.",
+                help="Mindestrelevanz eines Knowledge-Chunks. Niedrigere Werte geben mehr, aber potenziell schwächere Belege an das Modell. Höhere Werte reduzieren Kontext/Kosten und Rauschen, können aber hilfreiche Belege ausschließen.",
                 key=f"{llm_provider}_knowledge_min_score",
             )
             knowledge_chunk_chars = st.number_input(
@@ -743,8 +780,65 @@ def _build_args() -> SimpleNamespace:
                 min_value=200,
                 value=int(CONFIG["KNOWLEDGE_CHUNK_CHARS"]),
                 step=100,
-                help="Chunk-Größe beim Parsen der ZIP-Datei.",
+                key="knowledge_chunk_chars",
+                help="Chunk-Größe beim Parsen der Knowledge-ZIP. Kleinere Chunks erlauben präzisere Treffer, können aber Zusammenhänge zerlegen. Größere Chunks behalten Kontext, erhöhen jedoch Prompt-Länge und Kosten pro Treffer.",
             )
+
+        with st.expander("💾 Einstellungen speichern", expanded=False):
+            save_ui_config_path = _file_picker_row(
+                state_key="save_ui_config_file",
+                label="Speicherziel UI-Konfig",
+                default_path=_resolve_path(folder=data_folder, filename=analysis_config_default_name),
+                start_dir=data_folder,
+                help_text="JSON-Datei, in die die aktuell in der UI sichtbaren Workflow-Einstellungen gespeichert werden. API-Keys werden bewusst nicht gespeichert.",
+                optional=False,
+                require_existing=False,
+            )
+            current_settings_payload = {
+                "llm_provider": llm_provider,
+                "quality_cost_profile": quality_cost_profile,
+                "resume": bool(resume),
+                "limit": int(limit),
+                "checkpoint_every": int(checkpoint_every),
+                "sleep": float(sleep_seconds),
+                "passA_temperature": float(pass_a_temperature),
+                "passB_reasoning_effort": str(pass_b_reasoning_effort),
+                "trigger_answer_conf": float(trigger_answer_conf),
+                "trigger_topic_conf": float(trigger_topic_conf),
+                "apply_change_min_conf_b": float(apply_change_min_conf_b),
+                "low_conf_maintenance_threshold": float(low_conf_maintenance_threshold),
+                "text_cluster_similarity": float(text_cluster_similarity),
+                "abstraction_cluster_similarity": float(abstraction_cluster_similarity),
+                "enable_review_pass": bool(enable_review_pass),
+                "review_min_maintenance_severity": int(review_min_maintenance_severity),
+                "enable_reconstruction_pass": bool(enable_reconstruction_pass),
+                "enable_repeat_reconstruction": bool(enable_repeat_reconstruction),
+                "auto_apply_repeat_reconstruction": bool(auto_apply_repeat_reconstruction),
+                "repeat_min_similarity": float(repeat_min_similarity),
+                "repeat_min_anchor_conf": float(repeat_min_anchor_conf),
+                "repeat_min_anchor_consensus": int(repeat_min_anchor_consensus),
+                "repeat_min_match_ratio": float(repeat_min_match_ratio),
+                "enable_explainer_pass": bool(enable_explainer_pass),
+                "write_top_level": bool(write_top_level),
+                "debug": bool(debug),
+                "knowledge_subject_hint": knowledge_subject_hint.strip(),
+                "knowledge_top_k": int(knowledge_top_k),
+                "knowledge_max_chars": int(knowledge_max_chars),
+                "knowledge_min_score": float(knowledge_min_score),
+                "knowledge_chunk_chars": int(knowledge_chunk_chars),
+                "only_question_ids": [x.strip() for x in (only_question_ids_raw or "").split(",") if x.strip()],
+            }
+            if st.button(
+                "Aktuelle Einstellungen speichern",
+                key="save_current_ui_config",
+                disabled=not bool(save_ui_config_path.strip()),
+                help="Speichert genau die aktuell sichtbaren UI-Werte in die angegebene JSON-Datei. Diese Datei kann später über 'Einstellungen anwenden' wieder geladen und danach erneut manuell verändert werden.",
+            ):
+                try:
+                    save_json(save_ui_config_path.strip(), current_settings_payload)
+                    st.success(f"Einstellungen gespeichert: {save_ui_config_path}")
+                except Exception as exc:
+                    st.error(f"Einstellungen konnten nicht gespeichert werden: {exc}")
 
     return SimpleNamespace(
         postprocess_only=bool(is_postprocess_only),
