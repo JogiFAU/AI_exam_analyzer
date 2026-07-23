@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ai_exam_analyzer.llm_clients import build_llm_client, call_json_schema
 from ai_exam_analyzer.preprocessing import compute_preprocessing_assessment
+from ai_exam_analyzer.cost_tracking import add_records, estimate_tokens_from_text, make_cost_record
 
 
 def _load_context_doc() -> str:
@@ -122,7 +123,39 @@ def _schema() -> Dict[str, Any]:
     }
 
 
-def recommend_settings(*, provider: str, api_key: str, model: str, topic_tree: Any, questions: List[Dict[str, Any]], current: Dict[str, Any], knowledge_base: Optional[Any] = None) -> Tuple[Dict[str, Any], str]:
+def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], settings: Dict[str, Any], models: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    del provider
+    models = models or {}
+    q_count = len(questions)
+    sample_text = "\n".join(str(q.get("questionText") or "") for q in questions[: min(20, q_count)])
+    avg_question_tokens = max(80, estimate_tokens_from_text(sample_text) // max(1, min(20, q_count)))
+    knowledge_tokens = max(0, int(settings.get("knowledge_max_chars", 0) or 0) // 4)
+    base_input = avg_question_tokens + knowledge_tokens + 900
+    pass_b_ratio = 0.55
+    review_ratio = 0.18 if bool(settings.get("enable_review_pass")) else 0.0
+    reconstruction_ratio = 1.0 if bool(settings.get("enable_reconstruction_pass")) else 0.0
+    explainer_ratio = 1.0 if bool(settings.get("enable_explainer_pass")) else 0.0
+    records = [
+        make_cost_record(stage="base_pass_a", model=models.get("passA") or models.get("pass_a") or "gpt-5.4-nano", input_tokens=q_count * base_input, output_tokens=q_count * 900, estimated=True),
+        make_cost_record(stage="base_pass_b_estimated", model=models.get("passB") or models.get("pass_b") or models.get("passA") or "gpt-5.4-nano", input_tokens=int(q_count * pass_b_ratio * (base_input + 700)), output_tokens=int(q_count * pass_b_ratio * 750), estimated=True),
+        make_cost_record(stage="review_pass_estimated", model=models.get("review") or models.get("passB") or "gpt-5.4-nano", input_tokens=int(q_count * review_ratio * (base_input + 1200)), output_tokens=int(q_count * review_ratio * 900), estimated=True),
+        make_cost_record(stage="reconstruction_pass", model=models.get("reconstruction") or "gpt-5.4-nano", input_tokens=int(q_count * reconstruction_ratio * (base_input + 1000)), output_tokens=int(q_count * reconstruction_ratio * 1000), estimated=True),
+        make_cost_record(stage="explainer_pass", model=models.get("explainer") or models.get("passA") or "gpt-5.4-nano", input_tokens=int(q_count * explainer_ratio * (base_input + 800)), output_tokens=int(q_count * explainer_ratio * 1100), estimated=True),
+    ]
+    summary = add_records(records)
+    summary["assumptions"] = {
+        "question_count": q_count,
+        "avg_question_tokens": avg_question_tokens,
+        "knowledge_tokens_per_question": knowledge_tokens,
+        "pass_b_run_ratio": pass_b_ratio,
+        "review_run_ratio": review_ratio,
+        "currency": "USD",
+        "note": "Schätzung auf Zeichen-/Token-Heuristik und statischer Preistabelle; tatsächliche Kosten werden im Lauf aus API-Usage getrackt.",
+    }
+    return summary
+
+
+def recommend_settings(*, provider: str, api_key: str, model: str, topic_tree: Any, questions: List[Dict[str, Any]], current: Dict[str, Any], knowledge_base: Optional[Any] = None, models: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, Any], str, Dict[str, Any]]:
     llm = build_llm_client(provider=provider, api_key=api_key)
     sample = questions[: min(12, len(questions))]
     sample_payload = []
@@ -168,4 +201,7 @@ def recommend_settings(*, provider: str, api_key: str, model: str, topic_tree: A
     reasons = [str(x).strip() for x in (out.get("reasoning") or []) if str(x).strip()]
     if reasons:
         report = (report + "\n\n" if report else "") + "\n".join([f"- {x}" for x in reasons[:6]])
-    return settings, report
+    estimate = estimate_analysis_costs(provider=provider, questions=questions, settings={**current, **settings}, models=models or {"passB": model})
+    total_cost = float((estimate.get("total") or {}).get("costUsd") or 0.0)
+    report = (report + "\n\n" if report else "") + f"Geschätzte Gesamtkosten der Analyse: ${total_cost:.4f} (Details in cost_estimate)."
+    return settings, report, estimate

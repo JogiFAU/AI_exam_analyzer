@@ -25,6 +25,7 @@ from ai_exam_analyzer.topic_candidates import TopicCandidateIndex
 from ai_exam_analyzer.repeat_reconstruction import compute_repeat_reconstruction
 from ai_exam_analyzer.llm_clients import build_llm_client
 from ai_exam_analyzer.workflow_profiles import build_workflow_profile
+from ai_exam_analyzer.cost_tracking import add_records, make_cost_record
 
 
 def _answer_external_indices(q: Dict[str, Any]) -> List[int]:
@@ -527,6 +528,35 @@ def process_questions(
     catalog_rows = topic_catalog or sorted(key_map.values(), key=lambda x: (x.get("superTopicId", 0), x.get("subtopicId", 0)))
     topic_candidate_index = TopicCandidateIndex(catalog_rows) if catalog_rows else None
 
+    cost_records: List[Dict[str, Any]] = []
+
+    current_question_cost_records: List[Dict[str, Any]] = []
+
+    def record_cost(stage: str, model: str, result: Optional[Dict[str, Any]], question: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        del question
+        usage = (result or {}).pop("_llm_usage", None) if isinstance(result, dict) else None
+        record = make_cost_record(stage=stage, model=model, usage=usage)
+        cost_records.append(record)
+        current_question_cost_records.append(record)
+        return record
+
+    def emit_cost_progress(stage: str, model: str, result: Optional[Dict[str, Any]], question: Optional[Dict[str, Any]] = None) -> None:
+        record = record_cost(stage, model, result, question)
+        if question is not None and isinstance(question.get("aiAudit"), dict):
+            existing = list(((question["aiAudit"].get("costs") or {}).get("records") or []))
+            existing.append(record)
+            question["aiAudit"]["costs"] = add_records(existing)
+        summary = add_records(cost_records)
+        emit_progress(
+            event="cost_updated",
+            stage=stage,
+            cost_stage_usd=record["costUsd"],
+            cost_total_usd=(summary.get("total") or {}).get("costUsd", 0.0),
+            input_tokens=record["inputTokens"],
+            output_tokens=record["outputTokens"],
+            message=f"Kosten aktualisiert: {stage} ${record['costUsd']:.4f} (kumulativ ${float((summary.get('total') or {}).get('costUsd', 0.0)):.4f}).",
+        )
+
     report: Dict[str, Any] = {
         "totalQuestions": total_questions,
         "preprocessing": {"runLlmFalse": 0, "allowAutoChangeFalse": 0, "forceManualReview": 0},
@@ -648,6 +678,8 @@ def process_questions(
             skipped=skipped,
             message=f"Frage {i}/{total_questions}: Vorbereitung gestartet.",
         )
+
+        current_question_cost_records = []
 
         external_indices = _answer_external_indices(q)
         current = _coerce_dataset_correct_indices(q.get("correctIndices") or [], external_indices)
@@ -809,6 +841,7 @@ def process_questions(
                 temperature=args.passA_temperature,
                 question_images=question_images,
             )
+            emit_cost_progress("pass_a", args.passA_model, pass_a, q)
             emit_progress(
                 event="pass_a_finished",
                 stage="pass_a",
@@ -900,6 +933,7 @@ def process_questions(
                         reasoning_effort=args.passB_reasoning_effort,
                         question_images=question_images,
                     )
+                    emit_cost_progress("pass_b", args.passB_model, pass_b, q)
                     audit["models"]["passB"] = args.passB_model
                     report["passes"]["passBRan"] += 1
 
@@ -992,6 +1026,7 @@ def process_questions(
                         skipped=skipped,
                         message=f"Frage {i}/{total_questions}: Pass B Fehler – {e}",
                     )
+                    emit_cost_progress("pass_b", args.passB_model, pass_b, q)
                     audit["models"]["passB"] = args.passB_model
                     report["passes"]["passBRan"] += 1
                     verification = {"ran": True, "model": args.passB_model, "error": str(e)}
@@ -1128,6 +1163,7 @@ def process_questions(
                         model=args.review_model,
                         question_images=question_images,
                     )
+                    emit_cost_progress("review", args.review_model, review, q)
                     audit["models"]["review"] = args.review_model
                     report["passes"]["reviewRan"] += 1
                     review_indices = normalize_indices(
@@ -1171,6 +1207,7 @@ def process_questions(
                         skipped=skipped,
                         message=f"Frage {i}/{total_questions}: Review-Pass Fehler – {review_exc}",
                     )
+                    emit_cost_progress("review", args.review_model, review, q)
                     audit["models"]["review"] = args.review_model
                     report["passes"]["reviewRan"] += 1
                     # one robust fallback attempt with reduced audit context
@@ -1200,6 +1237,7 @@ def process_questions(
                             model=args.review_model,
                             question_images=question_images,
                         )
+                        emit_cost_progress("review_retry", args.review_model, review_retry, q)
                         audit["reviewPass"] = review_retry
                         if review_retry.get("recommendManualReview"):
                             audit["maintenance"]["needsMaintenance"] = True
@@ -1250,6 +1288,7 @@ def process_questions(
             audit["status"] = "error"
             audit["error"] = str(e)
 
+        audit["costs"] = add_records(current_question_cost_records)
         q["aiAudit"] = audit
         for reason in (((audit.get("maintenance") or {}).get("reasons") or [])):
             report["maintenanceReasons"][reason] = int(report["maintenanceReasons"].get(reason, 0)) + 1
@@ -1483,6 +1522,7 @@ def process_questions(
                     schema=schema_reconstruction,
                     model=args.reconstruction_model,
                 )
+                emit_cost_progress("reconstruction", args.reconstruction_model, rec, q)
                 audit["reconstruction"] = rec
                 if bool(rec.get("recommendManualReview")):
                     audit["maintenance"]["needsMaintenance"] = True
@@ -1515,6 +1555,7 @@ def process_questions(
                         schema=schema_reconstruction,
                         model=args.reconstruction_model,
                     )
+                    emit_cost_progress("reconstruction_retry", args.reconstruction_model, rec_retry, q)
                     audit["reconstruction"] = rec_retry
                     if bool(rec_retry.get("recommendManualReview")):
                         audit["maintenance"]["needsMaintenance"] = True
@@ -1624,6 +1665,7 @@ def process_questions(
                     schema=schema_explainer,
                     model=args.explainer_model,
                 )
+                emit_cost_progress("explainer", args.explainer_model, expl, q)
                 audit.setdefault("models", {})["explainer"] = args.explainer_model
                 audit["explainer"] = expl
                 emit_progress(
@@ -1686,11 +1728,13 @@ def process_questions(
 
     run_report_path = (getattr(args, "run_report", "") or "").strip()
     if run_report_path:
+        report["costs"] = add_records(cost_records)
         report["processed"] = processed
         report["done"] = done
         report["skipped"] = skipped
         save_json(run_report_path, report)
 
+    report["costs"] = add_records(cost_records)
     print(f"Finished. processed={processed} done={done} skipped={skipped}. Output: {args.output}")
     emit_progress(
         event="finished",
@@ -1726,6 +1770,27 @@ def rerun_postprocessing_from_output(
         if progress_callback is None:
             return
         progress_callback(payload)
+
+    cost_records: List[Dict[str, Any]] = []
+
+    def emit_cost_progress(stage: str, model: str, result: Optional[Dict[str, Any]], question: Optional[Dict[str, Any]] = None) -> None:
+        usage = (result or {}).pop("_llm_usage", None) if isinstance(result, dict) else None
+        record = make_cost_record(stage=stage, model=model, usage=usage)
+        cost_records.append(record)
+        if question is not None and isinstance(question.get("aiAudit"), dict):
+            existing = list(((question["aiAudit"].get("costs") or {}).get("records") or []))
+            existing.append(record)
+            question["aiAudit"]["costs"] = add_records(existing)
+        summary = add_records(cost_records)
+        emit_progress(
+            event="cost_updated",
+            stage=stage,
+            cost_stage_usd=record["costUsd"],
+            cost_total_usd=(summary.get("total") or {}).get("costUsd", 0.0),
+            input_tokens=record["inputTokens"],
+            output_tokens=record["outputTokens"],
+            message=f"Kosten aktualisiert: {stage} ${record['costUsd']:.4f} (kumulativ ${float((summary.get('total') or {}).get('costUsd', 0.0)):.4f}).",
+        )
 
     total_questions = len(questions)
     selected_question_ids = {str(x).strip() for x in (getattr(args, "only_question_ids", []) or []) if str(x).strip()}
@@ -1801,6 +1866,8 @@ def rerun_postprocessing_from_output(
             skipped=skipped,
             message=f"Frage {i}/{total_questions} Postprocessing gestartet (ID: {qid}).",
         )
+
+        current_question_cost_records = []
 
         external_indices = _answer_external_indices(q)
         current = _coerce_dataset_correct_indices(q.get("correctIndices") or [], external_indices)
@@ -1959,6 +2026,7 @@ def rerun_postprocessing_from_output(
                         schema=schema_reconstruction,
                         model=args.reconstruction_model,
                     )
+                    emit_cost_progress("reconstruction", args.reconstruction_model, rec, q)
                     audit["reconstruction"] = rec
                     if bool(rec.get("recommendManualReview")):
                         maintenance = audit.get("maintenance") or {}
@@ -2031,6 +2099,7 @@ def rerun_postprocessing_from_output(
                         schema=schema_explainer,
                         model=args.explainer_model,
                     )
+                    emit_cost_progress("explainer", args.explainer_model, expl, q)
                     audit.setdefault("models", {})["explainer"] = args.explainer_model
                     audit["explainer"] = expl
                     explainer_done += 1

@@ -1127,7 +1127,7 @@ def main() -> None:
                 "enable_reconstruction_pass": bool(args.enable_reconstruction_pass),
                 "enable_repeat_reconstruction": bool(args.enable_repeat_reconstruction),
             }
-            recommendations, auto_report = recommend_settings(
+            recommendations, auto_report, cost_estimate = recommend_settings(
                 provider=args.llm_provider,
                 api_key=args.api_key,
                 model=args.passB_model or args.passA_model,
@@ -1135,6 +1135,13 @@ def main() -> None:
                 questions=questions,
                 current=current_settings,
                 knowledge_base=knowledge_base,
+                models={
+                    "passA": args.passA_model,
+                    "passB": args.passB_model,
+                    "review": args.review_model,
+                    "reconstruction": args.reconstruction_model,
+                    "explainer": args.explainer_model,
+                },
             )
             for key, value in recommendations.items():
                 if hasattr(args, key):
@@ -1160,12 +1167,16 @@ def main() -> None:
                     "enable_repeat_reconstruction": bool(args.enable_repeat_reconstruction),
                 },
                 "report": auto_report,
+                "cost_estimate": cost_estimate,
             }
             target_cfg = args.save_tuning_config_path or _resolve_path(folder=os.path.dirname(args.input), filename="analysis_config.json")
             from ai_exam_analyzer.io_utils import save_json
-            save_json(target_cfg, tuning_payload["settings"])
+            save_json(target_cfg, tuning_payload)
             st.success(f"Parameter-Einstellung abgeschlossen. Konfig gespeichert: {target_cfg}")
             st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
+            cost_total = (cost_estimate.get("total") or {})
+            st.metric("Geschätzte Gesamtkosten", f"${float(cost_total.get('costUsd') or 0.0):.4f}")
+            st.json(cost_estimate)
             return
 
         recent_events: List[str] = []
@@ -1188,17 +1199,22 @@ def main() -> None:
                 headline = f"{headline} *(Frage {index}/{total})*"
             status_text.markdown(f"**[{stage}]** {headline}")
 
-            cols = metrics.columns(4)
+            cols = metrics.columns(5)
             cols[0].metric("Verarbeitet", f"{processed}/{total}")
             cols[1].metric("Abgeschlossen", str(done_count))
             cols[2].metric("Übersprungen", str(skipped_count))
             cols[3].metric("Phase", stage)
+            cols[4].metric("Kosten kumulativ", f"${float(event.get('cost_total_usd') or 0.0):.4f}")
 
             details = []
             if "retrieval_quality" in event:
                 details.append(f"rq={float(event.get('retrieval_quality') or 0.0):.2f}")
             if "evidence_count" in event:
                 details.append(f"evidence={int(event.get('evidence_count') or 0)}")
+            if "cost_stage_usd" in event:
+                details.append(f"cost_step=${float(event.get('cost_stage_usd') or 0.0):.4f}")
+            if "cost_total_usd" in event:
+                details.append(f"cost_total=${float(event.get('cost_total_usd') or 0.0):.4f}")
             detail_text = f" ({', '.join(details)})" if details else ""
 
             line = f"- [{stage}/{event_name}] {message}{detail_text}"
