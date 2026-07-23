@@ -12,7 +12,6 @@ from ai_exam_analyzer.io_utils import load_json
 from ai_exam_analyzer.model_profiles import (
     QUALITY_PROFILE_LABELS,
     QUALITY_PROFILE_OPTIONS,
-    apply_model_optimized_defaults,
     get_quality_cost_profile,
 )
 from ai_exam_analyzer.knowledge_base import (
@@ -88,6 +87,81 @@ def _get_default_documents_dir() -> str:
     if os.path.isdir(documents_dir):
         return documents_dir
     return home_dir
+
+
+def _profile_defaults_for_widgets(provider: str, profile_name: str) -> Dict[str, Any]:
+    profile = get_quality_cost_profile(provider=provider, profile=profile_name)
+    return {
+        "pass_a_temperature": profile.pass_a_temperature,
+        "pass_b_reasoning_effort": profile.pass_b_reasoning_effort,
+        "trigger_answer_conf": profile.trigger_answer_conf,
+        "trigger_topic_conf": profile.trigger_topic_conf,
+        "apply_change_min_conf_b": profile.apply_change_min_conf_b,
+        "low_conf_maintenance_threshold": profile.low_conf_maintenance_threshold,
+        "knowledge_top_k": profile.knowledge_top_k,
+        "knowledge_max_chars": profile.knowledge_max_chars,
+        "knowledge_min_score": profile.knowledge_min_score,
+        "enable_review_pass": profile.enable_review_pass,
+        "enable_reconstruction_pass": profile.enable_reconstruction_pass,
+    }
+
+
+def _apply_settings_to_ui_state(settings: Dict[str, Any]) -> None:
+    provider = str(settings.get("llm_provider") or st.session_state.get("llm_provider") or CONFIG["LLM_PROVIDER"])
+    if provider not in {"openai", "gemini"}:
+        provider = str(CONFIG["LLM_PROVIDER"])
+
+    profile_name = str(settings.get("quality_cost_profile") or st.session_state.get("quality_cost_profile") or CONFIG["QUALITY_COST_PROFILE"])
+    if profile_name not in QUALITY_PROFILE_OPTIONS:
+        profile_name = str(CONFIG["QUALITY_COST_PROFILE"])
+
+    st.session_state["llm_provider"] = provider
+    st.session_state["quality_cost_profile"] = profile_name
+    st.session_state[f"{provider}_last_applied_quality_cost_profile"] = profile_name
+
+    merged = _profile_defaults_for_widgets(provider, profile_name)
+    merged.update(settings)
+
+    key_map = {
+        "pass_a_temperature": f"{provider}_pass_a_temperature",
+        "pass_b_reasoning_effort": f"{provider}_pass_b_reasoning_effort",
+        "trigger_answer_conf": f"{provider}_trigger_answer_conf",
+        "trigger_topic_conf": f"{provider}_trigger_topic_conf",
+        "apply_change_min_conf_b": f"{provider}_apply_change_min_conf_b",
+        "low_conf_maintenance_threshold": f"{provider}_low_conf_maintenance_threshold",
+        "knowledge_top_k": f"{provider}_knowledge_top_k",
+        "knowledge_max_chars": f"{provider}_knowledge_max_chars",
+        "knowledge_min_score": f"{provider}_knowledge_min_score",
+        "enable_review_pass": f"{provider}_enable_review_pass",
+        "enable_reconstruction_pass": f"{provider}_enable_reconstruction_pass",
+    }
+    for cfg_key, state_key in key_map.items():
+        if cfg_key in merged:
+            st.session_state[state_key] = merged[cfg_key]
+
+
+def _sync_profile_defaults_when_changed(provider: str, profile_name: str) -> None:
+    state_key = f"{provider}_last_applied_quality_cost_profile"
+    previous = st.session_state.get(state_key)
+    if previous == profile_name:
+        return
+    profile_defaults = _profile_defaults_for_widgets(provider, profile_name)
+    key_map = {
+        "pass_a_temperature": f"{provider}_pass_a_temperature",
+        "pass_b_reasoning_effort": f"{provider}_pass_b_reasoning_effort",
+        "trigger_answer_conf": f"{provider}_trigger_answer_conf",
+        "trigger_topic_conf": f"{provider}_trigger_topic_conf",
+        "apply_change_min_conf_b": f"{provider}_apply_change_min_conf_b",
+        "low_conf_maintenance_threshold": f"{provider}_low_conf_maintenance_threshold",
+        "knowledge_top_k": f"{provider}_knowledge_top_k",
+        "knowledge_max_chars": f"{provider}_knowledge_max_chars",
+        "knowledge_min_score": f"{provider}_knowledge_min_score",
+        "enable_review_pass": f"{provider}_enable_review_pass",
+        "enable_reconstruction_pass": f"{provider}_enable_reconstruction_pass",
+    }
+    for cfg_key, value in profile_defaults.items():
+        st.session_state[key_map[cfg_key]] = value
+    st.session_state[state_key] = profile_name
 
 
 def _pick_directory(initial_dir: str) -> Optional[str]:
@@ -302,7 +376,7 @@ def _build_args() -> SimpleNamespace:
                 label="Analyse-Konfig JSON",
                 default_path=_resolve_path(folder=data_folder, filename=analysis_config_default_name),
                 start_dir=data_folder,
-                help_text="Konfig mit Parametern aus Parameter-Einstellung (wird automatisch erkannt).",
+                help_text="Konfig mit Parametern aus Parameter-Einstellung. Sie wird erst durch 'Einstellungen anwenden' übernommen.",
                 optional=True,
             )
             save_tuning_config_path = _file_picker_row(
@@ -315,25 +389,33 @@ def _build_args() -> SimpleNamespace:
                 require_existing=False,
             ) if is_tuning_only else analysis_config_path
 
-            if (not is_tuning_only) and (not is_postprocess_only) and analysis_config_path and os.path.exists(analysis_config_path):
-                try:
-                    loaded_cfg = load_json(analysis_config_path)
-                    if isinstance(loaded_cfg, dict):
-                        provider_prefix = str(st.session_state.get("llm_provider", "openai"))
-                        cfg_to_widget = {
-                            "trigger_answer_conf": f"{provider_prefix}_trigger_answer_conf",
-                            "trigger_topic_conf": f"{provider_prefix}_trigger_topic_conf",
-                            "apply_change_min_conf_b": f"{provider_prefix}_apply_change_min_conf_b",
-                            "low_conf_maintenance_threshold": f"{provider_prefix}_low_conf_maintenance_threshold",
-                            "knowledge_top_k": f"{provider_prefix}_knowledge_top_k",
-                            "knowledge_max_chars": f"{provider_prefix}_knowledge_max_chars",
-                            "knowledge_min_score": f"{provider_prefix}_knowledge_min_score",
-                        }
-                        for ck, wk in cfg_to_widget.items():
-                            if ck in loaded_cfg:
-                                st.session_state[wk] = loaded_cfg[ck]
-                except Exception:
-                    pass
+            if (not is_tuning_only) and (not is_postprocess_only):
+                config_cols = st.columns([1, 3])
+                with config_cols[0]:
+                    apply_config = st.button(
+                        "Einstellungen anwenden",
+                        key="apply_analysis_config",
+                        disabled=not (analysis_config_path and os.path.exists(analysis_config_path)),
+                        help="Lädt die Analyse-Konfig aktiv in die UI. Danach können alle Werte weiter angepasst werden.",
+                    )
+                with config_cols[1]:
+                    if analysis_config_path and os.path.exists(analysis_config_path):
+                        st.caption("Konfig gefunden. Sie wird erst nach Klick auf **Einstellungen anwenden** übernommen.")
+                    elif analysis_config_path:
+                        st.caption("Konfig-Datei noch nicht gefunden.")
+                if apply_config:
+                    try:
+                        loaded_cfg = load_json(analysis_config_path)
+                        if not isinstance(loaded_cfg, dict):
+                            raise ValueError("Analyse-Konfig muss ein JSON-Objekt sein.")
+                        if isinstance(loaded_cfg.get("settings"), dict):
+                            loaded_cfg = loaded_cfg["settings"]
+                        _apply_settings_to_ui_state(loaded_cfg)
+                        st.session_state["analysis_config_applied_path"] = analysis_config_path
+                        st.success("Einstellungen aus der Analyse-Konfig wurden in die UI übernommen.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Analyse-Konfig konnte nicht geladen werden: {exc}")
 
             cleanup_spec = ""
 
@@ -409,6 +491,7 @@ def _build_args() -> SimpleNamespace:
                 "LLM Provider",
                 options=["openai", "gemini"],
                 index=0 if CONFIG["LLM_PROVIDER"] == "openai" else 1,
+                key="llm_provider",
                 help="Wählt den verwendeten Modellanbieter für den gesamten Workflow.",
             )
             key_env = "OPENAI_API_KEY" if llm_provider == "openai" else "GEMINI_API_KEY"
@@ -425,9 +508,11 @@ def _build_args() -> SimpleNamespace:
                 "Priorität",
                 options=QUALITY_PROFILE_OPTIONS,
                 index=profile_default_index,
+                key="quality_cost_profile",
                 format_func=lambda value: QUALITY_PROFILE_LABELS.get(value, value),
-                help="Wählt ein abgestimmtes Set aus Modellen, Reasoning-Aufwand, Confidence-Schwellen und Knowledge-Budget. Modelle werden nicht mehr manuell ausgewählt.",
+                help="Wählt ein abgestimmtes Start-Set aus Modellen, Reasoning-Aufwand, Confidence-Schwellen und Knowledge-Budget. Danach bleiben die Detailwerte manuell anpassbar.",
             )
+            _sync_profile_defaults_when_changed(llm_provider, quality_cost_profile)
             selected_profile = get_quality_cost_profile(provider=llm_provider, profile=quality_cost_profile)
             default_pass_a_model = selected_profile.pass_a_model
             default_pass_b_model = selected_profile.pass_b_model
@@ -478,8 +563,8 @@ def _build_args() -> SimpleNamespace:
             enable_review_pass = st.checkbox(
                 "Pass C (Deep Review) aktivieren",
                 value=(False if is_explainer_only else bool(selected_profile.enable_review_pass)),
-                help="Optionaler dritter Review-Pass für wartungsintensive Fragen (durch Prioritätsprofil vorgegeben).",
-                disabled=True,
+                key=f"{llm_provider}_enable_review_pass",
+                help="Optionaler dritter Review-Pass für wartungsintensive Fragen. Das Prioritätsprofil setzt nur den Startwert.",
             )
             review_model = str(default_review_model)
             st.caption(f"Pass C Modell: `{review_model}`")
@@ -494,8 +579,8 @@ def _build_args() -> SimpleNamespace:
             enable_reconstruction_pass = st.checkbox(
                 "Reconstruction-Pass aktivieren",
                 value=(False if is_explainer_only else bool(selected_profile.enable_reconstruction_pass)),
-                help="Führt eine Rekonstruktions-/Altfrage-Bewertung pro Frage aus und annotiert das Ergebnis (durch Prioritätsprofil vorgegeben).",
-                disabled=True,
+                key=f"{llm_provider}_enable_reconstruction_pass",
+                help="Führt eine Rekonstruktions-/Altfrage-Bewertung pro Frage aus und annotiert das Ergebnis. Das Prioritätsprofil setzt nur den Startwert.",
             )
             reconstruction_model = str(default_reconstruction_model)
             st.caption(f"Reconstruction Modell: `{reconstruction_model}`")
@@ -569,21 +654,21 @@ def _build_args() -> SimpleNamespace:
                     min_value=0.0,
                     max_value=2.0,
                     value=float(provider_defaults["pass_a_temperature"]),
+                    key=f"{llm_provider}_pass_a_temperature",
                     step=0.1,
-                    help="Sampling-Temperatur für Pass A.",
-                    disabled=True,
+                    help="Sampling-Temperatur für Pass A. Das Prioritätsprofil setzt nur den Startwert.",
                 )
                 pass_b_reasoning_effort = st.selectbox(
                     "Pass B Reasoning Effort",
                     options=["low", "medium", "high", "xhigh"],
                     index=["low", "medium", "high", "xhigh"].index(str(provider_defaults["pass_b_reasoning_effort"])),
-                    help="Rechenaufwand für Pass B.",
-                    disabled=True,
+                    key=f"{llm_provider}_pass_b_reasoning_effort",
+                    help="Rechenaufwand für Pass B. Das Prioritätsprofil setzt nur den Startwert.",
                 )
-                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf", disabled=True)
-                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf", disabled=True)
-                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b", disabled=True)
-                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold", disabled=True)
+                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf")
+                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf")
+                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b")
+                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold")
 
                 enable_repeat_reconstruction = st.checkbox(
                     "Repeat-Reconstruction aktivieren",
@@ -634,8 +719,7 @@ def _build_args() -> SimpleNamespace:
                 min_value=1,
                 value=int(kb_budget_defaults.knowledge_top_k),
                 key=f"{llm_provider}_knowledge_top_k",
-                help="Anzahl der Beleg-Chunks pro Frage (durch Prioritätsprofil vorgegeben).",
-                disabled=True,
+                help="Anzahl der Beleg-Chunks pro Frage. Das Prioritätsprofil setzt nur den Startwert.",
             )
             knowledge_max_chars = st.number_input(
                 "Knowledge Max Chars",
@@ -643,8 +727,7 @@ def _build_args() -> SimpleNamespace:
                 value=int(kb_budget_defaults.knowledge_max_chars),
                 key=f"{llm_provider}_knowledge_max_chars",
                 step=100,
-                help="Maximale Gesamtlänge der übergebenen Belege (durch Prioritätsprofil vorgegeben).",
-                disabled=True,
+                help="Maximale Gesamtlänge der übergebenen Belege. Das Prioritätsprofil setzt nur den Startwert.",
             )
             knowledge_min_score = st.slider(
                 "Knowledge Min Score",
@@ -654,7 +737,6 @@ def _build_args() -> SimpleNamespace:
                 0.01,
                 help="Mindestrelevanz eines Chunks.",
                 key=f"{llm_provider}_knowledge_min_score",
-                disabled=True,
             )
             knowledge_chunk_chars = st.number_input(
                 "Knowledge Chunk Chars",
@@ -768,7 +850,6 @@ def main() -> None:
     st.caption("Konfiguration, API-Key und Live-Analysefortschritt in einer Oberfläche.")
 
     args = _build_args()
-    apply_model_optimized_defaults(args)
 
     start_label = "Parameter-Einstellung starten" if bool(getattr(args, "tuning_only", False)) else (("Explainer-Pass starten" if bool(getattr(args, "enable_explainer_pass", False)) and not bool(getattr(args, "enable_review_pass", False)) and not bool(getattr(args, "enable_reconstruction_pass", False)) else "Postprocessing starten") if bool(getattr(args, "postprocess_only", False)) else "Analyse starten")
     start_button = st.button(start_label, type="primary", use_container_width=True)
@@ -816,14 +897,6 @@ def main() -> None:
         image_store = _prepare_image_store(args)
         knowledge_base = _prepare_knowledge_base(args, topic_tree)
 
-        if (not bool(getattr(args, "tuning_only", False))) and args.analysis_config_path and os.path.exists(args.analysis_config_path):
-            loaded_cfg = load_json(args.analysis_config_path)
-            if isinstance(loaded_cfg, dict):
-                for key, value in loaded_cfg.items():
-                    if hasattr(args, key):
-                        setattr(args, key, value)
-                apply_model_optimized_defaults(args)
-
         auto_report: Optional[str] = None
         if bool(getattr(args, "tuning_only", False)) and not bool(getattr(args, "postprocess_only", False)):
             status_text.markdown("**[autotune]** Analysiere Datensatz und ermittle passende Parameter …")
@@ -851,7 +924,6 @@ def main() -> None:
             for key, value in recommendations.items():
                 if hasattr(args, key):
                     setattr(args, key, value)
-            apply_model_optimized_defaults(args)
 
             provider_prefix = str(args.llm_provider)
             state_map = {
