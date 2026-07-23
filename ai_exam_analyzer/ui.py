@@ -1097,18 +1097,19 @@ def main() -> None:
     progress_bar = st.progress(0)
     status_text = st.empty()
     metrics = st.empty()
+    current_step_text = st.empty()
     event_log = st.empty()
     init_events: List[str] = []
 
     def show_live_step(stage: str, message: str, *, progress: float = 0.0, detail: str = "") -> None:
         progress_bar.progress(min(1.0, max(0.0, float(progress))))
         status_text.markdown(f"**[{stage}]** {message}")
-        cols = metrics.columns(5)
+        cols = metrics.columns(4)
         cols[0].metric("Verarbeitet", "0/—")
         cols[1].metric("Abgeschlossen", "0")
         cols[2].metric("Übersprungen", "0")
-        cols[3].metric("Phase", stage)
-        cols[4].metric("Kosten kumulativ", format_eur(0.0))
+        cols[3].metric("Kosten kumulativ", format_eur(0.0))
+        current_step_text.markdown(f"**Aktueller Schritt:** {stage} – {message}")
         suffix = f" — {detail}" if detail else ""
         init_events.append(f"- [{stage}/init] {message}{suffix}")
         if len(init_events) > 20:
@@ -1243,8 +1244,10 @@ def main() -> None:
 
         show_live_step("pipeline", "Starte Analyse-Workflow …", progress=0.45)
         recent_events: List[str] = list(init_events[-8:])
+        latest_cost_total_formatted = format_eur(0.0)
 
         def on_progress(event: Dict[str, Any]) -> None:
+            nonlocal latest_cost_total_formatted
             total = max(1, int(event.get("total") or len(questions) or 1))
             processed = int(event.get("processed", 0) or 0)
             done_count = int(event.get("done", 0) or 0)
@@ -1262,12 +1265,15 @@ def main() -> None:
                 headline = f"{headline} *(Frage {index}/{total})*"
             status_text.markdown(f"**[{stage}]** {headline}")
 
-            cols = metrics.columns(5)
+            if "cost_total_formatted" in event or "cost_total_eur" in event:
+                latest_cost_total_formatted = str(event.get("cost_total_formatted") or format_eur(float(event.get("cost_total_eur") or 0.0)))
+
+            cols = metrics.columns(4)
             cols[0].metric("Verarbeitet", f"{processed}/{total}")
             cols[1].metric("Abgeschlossen", str(done_count))
             cols[2].metric("Übersprungen", str(skipped_count))
-            cols[3].metric("Phase", stage)
-            cols[4].metric("Kosten kumulativ", str(event.get("cost_total_formatted") or format_eur(float(event.get("cost_total_eur") or 0.0))))
+            cols[3].metric("Kosten kumulativ", latest_cost_total_formatted)
+            current_step_text.markdown(f"**Aktueller Schritt:** {stage} – {headline}")
 
             details = []
             if "retrieval_quality" in event:
