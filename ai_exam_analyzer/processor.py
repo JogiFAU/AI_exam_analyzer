@@ -1189,6 +1189,7 @@ def process_questions(
                 pass_a_topic_key=pass_a["topic_initial"]["topicKey"],
                 final_topic_key=final_topic_key,
             ):
+                review: Optional[Dict[str, Any]] = None
                 try:
                     emit_progress(
                         event="review_started",
@@ -1208,7 +1209,8 @@ def process_questions(
                         model=args.review_model,
                         question_images=question_images,
                     )
-                    emit_cost_progress("review", args.review_model, review, q, i)
+                    if review is not None:
+                        emit_cost_progress("review", args.review_model, review, q, i)
                     audit["models"]["review"] = args.review_model
                     report["passes"]["reviewRan"] += 1
                     review_indices = normalize_indices(
@@ -1252,7 +1254,8 @@ def process_questions(
                         skipped=skipped,
                         message=f"Frage {i}/{total_questions}: Review-Pass Fehler – {review_exc}",
                     )
-                    emit_cost_progress("review", args.review_model, review, q, i)
+                    if review is not None:
+                        emit_cost_progress("review", args.review_model, review, q, i)
                     audit["models"]["review"] = args.review_model
                     report["passes"]["reviewRan"] += 1
                     # one robust fallback attempt with reduced audit context
