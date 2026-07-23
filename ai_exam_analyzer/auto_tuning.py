@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ai_exam_analyzer.llm_clients import build_llm_client, call_json_schema
+from ai_exam_analyzer.model_profiles import QUALITY_PROFILE_LABELS, QUALITY_PROFILE_OPTIONS, get_quality_cost_profile
 from ai_exam_analyzer.preprocessing import compute_preprocessing_assessment
 from ai_exam_analyzer.cost_tracking import add_records, estimate_tokens_from_text, format_eur, make_cost_record
 
@@ -134,7 +135,7 @@ def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], s
     pass_b_ratio = 0.55
     review_ratio = 0.18 if bool(settings.get("enable_review_pass")) else 0.0
     reconstruction_ratio = 1.0 if bool(settings.get("enable_reconstruction_pass")) else 0.0
-    explainer_ratio = 1.0 if bool(settings.get("enable_explainer_pass")) else 0.0
+    explainer_ratio = 1.0 if bool(settings.get("enable_explainer_pass", True)) else 0.0
     records = [
         make_cost_record(stage="base_pass_a", model=models.get("passA") or models.get("pass_a") or "gpt-5.4-nano", input_tokens=q_count * base_input, output_tokens=q_count * 900, estimated=True),
         make_cost_record(stage="base_pass_b_estimated", model=models.get("passB") or models.get("pass_b") or models.get("passA") or "gpt-5.4-nano", input_tokens=int(q_count * pass_b_ratio * (base_input + 700)), output_tokens=int(q_count * pass_b_ratio * 750), estimated=True),
@@ -153,6 +154,55 @@ def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], s
         "note": "Schätzung auf Zeichen-/Token-Heuristik, statischer Provider-Preistabelle und USD-EUR-Umrechnung; tatsächliche Tokens werden im Lauf aus API-Usage getrackt.",
     }
     return summary
+
+
+def _models_for_profile(*, provider: str, profile_name: str) -> Dict[str, str]:
+    profile = get_quality_cost_profile(provider=provider, profile=profile_name)
+    return {
+        "passA": profile.pass_a_model,
+        "passB": profile.pass_b_model,
+        "review": profile.review_model,
+        "reconstruction": profile.reconstruction_model,
+        "explainer": profile.explainer_model,
+    }
+
+
+def _settings_for_profile(*, provider: str, profile_name: str, current: Dict[str, Any]) -> Dict[str, Any]:
+    profile = get_quality_cost_profile(provider=provider, profile=profile_name)
+    return {
+        **current,
+        "trigger_answer_conf": profile.trigger_answer_conf,
+        "trigger_topic_conf": profile.trigger_topic_conf,
+        "apply_change_min_conf_b": profile.apply_change_min_conf_b,
+        "low_conf_maintenance_threshold": profile.low_conf_maintenance_threshold,
+        "knowledge_top_k": profile.knowledge_top_k,
+        "knowledge_max_chars": profile.knowledge_max_chars,
+        "knowledge_min_score": profile.knowledge_min_score,
+        "enable_review_pass": profile.enable_review_pass,
+        "enable_reconstruction_pass": profile.enable_reconstruction_pass,
+        # Keep explainer visible in tuning estimates by default; callers can
+        # explicitly set enable_explainer_pass=False to price a run without it.
+        "enable_explainer_pass": bool(current.get("enable_explainer_pass", True)),
+    }
+
+
+def estimate_quality_profile_costs(*, provider: str, questions: List[Dict[str, Any]], current: Dict[str, Any]) -> Dict[str, Any]:
+    estimates: Dict[str, Any] = {}
+    for profile_name in QUALITY_PROFILE_OPTIONS:
+        estimate = estimate_analysis_costs(
+            provider=provider,
+            questions=questions,
+            settings=_settings_for_profile(provider=provider, profile_name=profile_name, current=current),
+            models=_models_for_profile(provider=provider, profile_name=profile_name),
+        )
+        estimates[profile_name] = {
+            "label": QUALITY_PROFILE_LABELS.get(profile_name, profile_name),
+            "models": _models_for_profile(provider=provider, profile_name=profile_name),
+            "settings": _settings_for_profile(provider=provider, profile_name=profile_name, current=current),
+            "estimate": estimate,
+            "total": estimate.get("total") or {},
+        }
+    return estimates
 
 
 def recommend_settings(*, provider: str, api_key: str, model: str, topic_tree: Any, questions: List[Dict[str, Any]], current: Dict[str, Any], knowledge_base: Optional[Any] = None, models: Optional[Dict[str, str]] = None) -> Tuple[Dict[str, Any], str, Dict[str, Any]]:
@@ -196,12 +246,23 @@ def recommend_settings(*, provider: str, api_key: str, model: str, topic_tree: A
         reasoning_effort="medium",
         max_output_tokens=1200,
     )
+    tuning_request_cost = make_cost_record(stage="auto_tuning_request", model=model, usage=out.pop("_llm_usage", None))
     settings = out.get("settings") or {}
     report = str(out.get("report_short") or "").strip()
     reasons = [str(x).strip() for x in (out.get("reasoning") or []) if str(x).strip()]
     if reasons:
         report = (report + "\n\n" if report else "") + "\n".join([f"- {x}" for x in reasons[:6]])
-    estimate = estimate_analysis_costs(provider=provider, questions=questions, settings={**current, **settings}, models=models or {"passB": model})
+    effective_current = {**current}
+    # If the UI did not expose explainer during tuning, still estimate it so the
+    # user sees the cost impact of enabling that pass in the breakdown.
+    effective_current.setdefault("enable_explainer_pass", True)
+    estimate = estimate_analysis_costs(provider=provider, questions=questions, settings={**effective_current, **settings}, models=models or {"passB": model})
+    estimate["profileEstimates"] = estimate_quality_profile_costs(provider=provider, questions=questions, current={**effective_current, **settings})
+    estimate["tuningRequest"] = tuning_request_cost
     total_cost = float((estimate.get("total") or {}).get("costEur") or 0.0)
-    report = (report + "\n\n" if report else "") + f"Geschätzte Gesamtkosten der Analyse: {format_eur(total_cost)} (Details in cost_estimate)."
+    tuning_cost = float(tuning_request_cost.get("costEur") or 0.0)
+    report = (report + "\n\n" if report else "") + (
+        f"Geschätzte Gesamtkosten der Analyse: {format_eur(total_cost)} (Details in cost_estimate).\n"
+        f"Kosten dieser Parameter-Abfrage: {format_eur(tuning_cost)}."
+    )
     return settings, report, estimate

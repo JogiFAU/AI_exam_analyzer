@@ -1213,6 +1213,25 @@ def main() -> None:
             st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
             cost_total = (cost_estimate.get("total") or {})
             st.metric("Geschätzte Gesamtkosten", cost_total.get("costFormatted") or format_eur(float(cost_total.get("costEur") or 0.0)))
+            tuning_cost = (cost_estimate.get("tuningRequest") or {})
+            st.metric("Kosten dieser Parameter-Abfrage", tuning_cost.get("costFormatted") or format_eur(float(tuning_cost.get("costEur") or 0.0)))
+            profile_rows = []
+            for profile_name, payload in (cost_estimate.get("profileEstimates") or {}).items():
+                total_payload = payload.get("total") or {}
+                by_stage = ((payload.get("estimate") or {}).get("byStage") or {})
+                profile_rows.append({
+                    "Voreinstellung": payload.get("label") or profile_name,
+                    "Profil-Key": profile_name,
+                    "Gesamt": total_payload.get("costFormatted") or format_eur(float(total_payload.get("costEur") or 0.0)),
+                    "Basis A": (by_stage.get("base_pass_a") or {}).get("costFormatted") or format_eur(0.0),
+                    "Pass B geschätzt": (by_stage.get("base_pass_b_estimated") or {}).get("costFormatted") or format_eur(0.0),
+                    "Review": (by_stage.get("review_pass_estimated") or {}).get("costFormatted") or format_eur(0.0),
+                    "Reconstruction": (by_stage.get("reconstruction_pass") or {}).get("costFormatted") or format_eur(0.0),
+                    "Explainer": (by_stage.get("explainer_pass") or {}).get("costFormatted") or format_eur(0.0),
+                })
+            if profile_rows:
+                st.subheader("Kostenvergleich aller Voreinstellungen")
+                st.dataframe(profile_rows, use_container_width=True, hide_index=True)
             st.json(cost_estimate)
             return
 
