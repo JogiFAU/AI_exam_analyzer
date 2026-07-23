@@ -289,6 +289,11 @@ def _build_args() -> SimpleNamespace:
     if "output_folder" not in st.session_state:
         st.session_state["output_folder"] = st.session_state["data_folder"]
 
+    pending_cfg = st.session_state.pop("_pending_analysis_config", None)
+    if isinstance(pending_cfg, dict):
+        _apply_settings_to_ui_state(pending_cfg)
+        st.session_state["analysis_config_apply_success"] = True
+
     data_folder = st.session_state["data_folder"]
     output_folder = st.session_state["output_folder"]
 
@@ -301,6 +306,8 @@ def _build_args() -> SimpleNamespace:
 
     with st.sidebar:
         st.header("Einstellungen")
+        if st.session_state.pop("analysis_config_apply_success", False):
+            st.success("Einstellungen aus der Analyse-Konfig wurden in die UI übernommen.")
         run_mode = st.radio(
             "Modus",
             options=["Vollständige Analyse", "Parameter-Einstellung", "Postprocessing only", "Explainer only"],
@@ -439,9 +446,8 @@ def _build_args() -> SimpleNamespace:
                             raise ValueError("Analyse-Konfig muss ein JSON-Objekt sein.")
                         if isinstance(loaded_cfg.get("settings"), dict):
                             loaded_cfg = loaded_cfg["settings"]
-                        _apply_settings_to_ui_state(loaded_cfg)
+                        st.session_state["_pending_analysis_config"] = loaded_cfg
                         st.session_state["analysis_config_applied_path"] = analysis_config_path
-                        st.success("Einstellungen aus der Analyse-Konfig wurden in die UI übernommen.")
                         st.rerun()
                     except Exception as exc:
                         st.error(f"Analyse-Konfig konnte nicht geladen werden: {exc}")
