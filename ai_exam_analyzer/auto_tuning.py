@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ai_exam_analyzer.llm_clients import build_llm_client, call_json_schema
 from ai_exam_analyzer.preprocessing import compute_preprocessing_assessment
-from ai_exam_analyzer.cost_tracking import add_records, estimate_tokens_from_text, make_cost_record
+from ai_exam_analyzer.cost_tracking import add_records, estimate_tokens_from_text, format_eur, make_cost_record
 
 
 def _load_context_doc() -> str:
@@ -149,8 +149,8 @@ def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], s
         "knowledge_tokens_per_question": knowledge_tokens,
         "pass_b_run_ratio": pass_b_ratio,
         "review_run_ratio": review_ratio,
-        "currency": "USD",
-        "note": "Schätzung auf Zeichen-/Token-Heuristik und statischer Preistabelle; tatsächliche Kosten werden im Lauf aus API-Usage getrackt.",
+        "currency": "EUR",
+        "note": "Schätzung auf Zeichen-/Token-Heuristik, statischer Provider-Preistabelle und USD-EUR-Umrechnung; tatsächliche Tokens werden im Lauf aus API-Usage getrackt.",
     }
     return summary
 
@@ -202,6 +202,6 @@ def recommend_settings(*, provider: str, api_key: str, model: str, topic_tree: A
     if reasons:
         report = (report + "\n\n" if report else "") + "\n".join([f"- {x}" for x in reasons[:6]])
     estimate = estimate_analysis_costs(provider=provider, questions=questions, settings={**current, **settings}, models=models or {"passB": model})
-    total_cost = float((estimate.get("total") or {}).get("costUsd") or 0.0)
-    report = (report + "\n\n" if report else "") + f"Geschätzte Gesamtkosten der Analyse: ${total_cost:.4f} (Details in cost_estimate)."
+    total_cost = float((estimate.get("total") or {}).get("costEur") or 0.0)
+    report = (report + "\n\n" if report else "") + f"Geschätzte Gesamtkosten der Analyse: {format_eur(total_cost)} (Details in cost_estimate)."
     return settings, report, estimate

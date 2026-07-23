@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import streamlit as st
 
 from ai_exam_analyzer.config import CONFIG
+from ai_exam_analyzer.cost_tracking import format_eur
 from ai_exam_analyzer.image_store import QuestionImageStore
 from ai_exam_analyzer.io_utils import load_json, save_json
 from ai_exam_analyzer.model_profiles import (
@@ -1084,7 +1085,7 @@ def main() -> None:
         cols[1].metric("Abgeschlossen", "0")
         cols[2].metric("Übersprungen", "0")
         cols[3].metric("Phase", stage)
-        cols[4].metric("Kosten kumulativ", "$0.0000")
+        cols[4].metric("Kosten kumulativ", format_eur(0.0))
         suffix = f" — {detail}" if detail else ""
         init_events.append(f"- [{stage}/init] {message}{suffix}")
         if len(init_events) > 20:
@@ -1211,7 +1212,7 @@ def main() -> None:
             st.success(f"Parameter-Einstellung abgeschlossen. Konfig gespeichert: {target_cfg}")
             st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
             cost_total = (cost_estimate.get("total") or {})
-            st.metric("Geschätzte Gesamtkosten", f"${float(cost_total.get('costUsd') or 0.0):.4f}")
+            st.metric("Geschätzte Gesamtkosten", cost_total.get("costFormatted") or format_eur(float(cost_total.get("costEur") or 0.0)))
             st.json(cost_estimate)
             return
 
@@ -1241,17 +1242,17 @@ def main() -> None:
             cols[1].metric("Abgeschlossen", str(done_count))
             cols[2].metric("Übersprungen", str(skipped_count))
             cols[3].metric("Phase", stage)
-            cols[4].metric("Kosten kumulativ", f"${float(event.get('cost_total_usd') or 0.0):.4f}")
+            cols[4].metric("Kosten kumulativ", str(event.get("cost_total_formatted") or format_eur(float(event.get("cost_total_eur") or 0.0))))
 
             details = []
             if "retrieval_quality" in event:
                 details.append(f"rq={float(event.get('retrieval_quality') or 0.0):.2f}")
             if "evidence_count" in event:
                 details.append(f"evidence={int(event.get('evidence_count') or 0)}")
-            if "cost_stage_usd" in event:
-                details.append(f"cost_step=${float(event.get('cost_stage_usd') or 0.0):.4f}")
-            if "cost_total_usd" in event:
-                details.append(f"cost_total=${float(event.get('cost_total_usd') or 0.0):.4f}")
+            if "cost_stage_eur" in event or "cost_stage_formatted" in event:
+                details.append(f"cost_step={event.get('cost_stage_formatted') or format_eur(float(event.get('cost_stage_eur') or 0.0))}")
+            if "cost_total_eur" in event or "cost_total_formatted" in event:
+                details.append(f"cost_total={event.get('cost_total_formatted') or format_eur(float(event.get('cost_total_eur') or 0.0))}")
             detail_text = f" ({', '.join(details)})" if details else ""
 
             line = f"- [{stage}/{event_name}] {message}{detail_text}"

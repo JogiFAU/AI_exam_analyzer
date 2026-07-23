@@ -26,7 +26,7 @@ from ai_exam_analyzer.topic_candidates import TopicCandidateIndex
 from ai_exam_analyzer.repeat_reconstruction import compute_repeat_reconstruction
 from ai_exam_analyzer.llm_clients import build_llm_client
 from ai_exam_analyzer.workflow_profiles import build_workflow_profile
-from ai_exam_analyzer.cost_tracking import add_records, make_cost_record
+from ai_exam_analyzer.cost_tracking import add_records, format_eur, make_cost_record
 
 
 def _answer_external_indices(q: Dict[str, Any]) -> List[int]:
@@ -128,7 +128,7 @@ def _build_cost_report_payload(*, records: List[Dict[str, Any]], args: Any, tota
         "processed": int(processed),
         "done": int(done),
         "skipped": int(skipped),
-        "currency": "USD",
+        "currency": "EUR",
         "summary": summary.get("total") or {},
         "byStage": summary.get("byStage") or {},
         "records": list(records),
@@ -595,11 +595,13 @@ def process_questions(
         emit_progress(
             event="cost_updated",
             stage=stage,
-            cost_stage_usd=record["costUsd"],
-            cost_total_usd=(summary.get("total") or {}).get("costUsd", 0.0),
+            cost_stage_eur=record["costEur"],
+            cost_total_eur=(summary.get("total") or {}).get("costEur", 0.0),
+            cost_stage_formatted=record.get("costFormatted") or format_eur(record.get("costEur") or 0.0),
+            cost_total_formatted=(summary.get("total") or {}).get("costFormatted") or format_eur((summary.get("total") or {}).get("costEur") or 0.0),
             input_tokens=record["inputTokens"],
             output_tokens=record["outputTokens"],
-            message=f"Kosten aktualisiert: {stage} ${record['costUsd']:.4f} (kumulativ ${float((summary.get('total') or {}).get('costUsd', 0.0)):.4f}).",
+            message=f"Kosten aktualisiert: {stage} {record.get('costFormatted') or format_eur(record.get('costEur') or 0.0)} (kumulativ {(summary.get('total') or {}).get('costFormatted') or format_eur((summary.get('total') or {}).get('costEur') or 0.0)}).",
         )
 
     report: Dict[str, Any] = {
@@ -1856,11 +1858,13 @@ def rerun_postprocessing_from_output(
         emit_progress(
             event="cost_updated",
             stage=stage,
-            cost_stage_usd=record["costUsd"],
-            cost_total_usd=(summary.get("total") or {}).get("costUsd", 0.0),
+            cost_stage_eur=record["costEur"],
+            cost_total_eur=(summary.get("total") or {}).get("costEur", 0.0),
+            cost_stage_formatted=record.get("costFormatted") or format_eur(record.get("costEur") or 0.0),
+            cost_total_formatted=(summary.get("total") or {}).get("costFormatted") or format_eur((summary.get("total") or {}).get("costEur") or 0.0),
             input_tokens=record["inputTokens"],
             output_tokens=record["outputTokens"],
-            message=f"Kosten aktualisiert: {stage} ${record['costUsd']:.4f} (kumulativ ${float((summary.get('total') or {}).get('costUsd', 0.0)):.4f}).",
+            message=f"Kosten aktualisiert: {stage} {record.get('costFormatted') or format_eur(record.get('costEur') or 0.0)} (kumulativ {(summary.get('total') or {}).get('costFormatted') or format_eur((summary.get('total') or {}).get('costEur') or 0.0)}).",
         )
 
     total_questions = len(questions)
