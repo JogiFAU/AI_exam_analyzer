@@ -1004,6 +1004,7 @@ def _build_args() -> SimpleNamespace:
         review_min_maintenance_severity=int(review_min_maintenance_severity),
         topic_candidate_top_k=int(CONFIG["TOPIC_CANDIDATE_TOP_K"]),
         run_report=str(CONFIG.get("RUN_REPORT_PATH", "")),
+        cost_report=str(CONFIG.get("COST_REPORT_PATH", "")),
         topic_candidate_outside_force_passb_conf=float(CONFIG["TOPIC_CANDIDATE_OUTSIDE_FORCE_PASSB_CONF"]),
         enable_repeat_reconstruction=bool(enable_repeat_reconstruction),
         auto_apply_repeat_reconstruction=bool(auto_apply_repeat_reconstruction),
@@ -1244,6 +1245,7 @@ def main() -> None:
 
         progress_bar.progress(1.0)
         st.success(f"Analyse beendet. Ergebnis gespeichert unter: {args.output}")
+        st.caption("Kosten-/Token-Report: automatisch neben der Ausgabe als `.costs.json` gespeichert (oder über COST_REPORT_PATH konfigurierbar).")
         if auto_report:
             st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
 
