@@ -182,9 +182,12 @@ def _sync_profile_defaults_when_changed(provider: str, profile_name: str) -> Non
         "knowledge_min_score": f"{provider}_knowledge_min_score",
         "enable_review_pass": f"{provider}_enable_review_pass",
         "enable_reconstruction_pass": f"{provider}_enable_reconstruction_pass",
+        "enable_explainer_pass": "enable_explainer_pass",
     }
     for cfg_key, value in profile_defaults.items():
-        st.session_state[key_map[cfg_key]] = value
+        state_target = key_map.get(cfg_key)
+        if state_target:
+            st.session_state[state_target] = value
     st.session_state[state_key] = profile_name
 
 
