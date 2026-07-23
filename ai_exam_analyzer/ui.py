@@ -1214,6 +1214,7 @@ def main() -> None:
             st.info("**Auto-Konfig Bericht**\n\n" + auto_report)
             cost_total = (cost_estimate.get("total") or {})
             st.metric("Geschätzte Gesamtkosten", cost_total.get("costFormatted") or format_eur(float(cost_total.get("costEur") or 0.0)))
+            st.metric("Standardabweichung der Schätzung", cost_total.get("standardDeviationFormatted") or format_eur(float(cost_total.get("standardDeviationEur") or 0.0)))
             tuning_cost = (cost_estimate.get("tuningRequest") or {})
             st.metric("Kosten dieser Parameter-Abfrage", tuning_cost.get("costFormatted") or format_eur(float(tuning_cost.get("costEur") or 0.0)))
             profile_rows = []
@@ -1224,6 +1225,7 @@ def main() -> None:
                     "Voreinstellung": payload.get("label") or profile_name,
                     "Profil-Key": profile_name,
                     "Gesamt": total_payload.get("costFormatted") or format_eur(float(total_payload.get("costEur") or 0.0)),
+                    "Stdabw.": total_payload.get("standardDeviationFormatted") or format_eur(float(total_payload.get("standardDeviationEur") or 0.0)),
                     "Initialisierung": (by_stage.get("initialization_and_loading") or {}).get("costFormatted") or format_eur(0.0),
                     "Retrieval/Kontext": (by_stage.get("retrieval_and_context_building") or {}).get("costFormatted") or format_eur(0.0),
                     "Basis A": (by_stage.get("pass_a") or by_stage.get("base_pass_a") or {}).get("costFormatted") or format_eur(0.0),

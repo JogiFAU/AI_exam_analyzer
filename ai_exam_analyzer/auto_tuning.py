@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -130,50 +131,153 @@ def _zero_cost_stage(stage: str, *, note: str) -> Dict[str, Any]:
     return record
 
 
+def _question_payload_token_stats(questions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    token_counts: List[int] = []
+    for q in questions:
+        # Estimate the payload size closer to the real pass payload than only
+        # questionText: answers, ids, correct-answer markers, image references,
+        # and existing annotations all add prompt tokens.
+        token_counts.append(estimate_tokens_from_text(json.dumps(q, ensure_ascii=False, default=str)))
+    if not token_counts:
+        token_counts = [80]
+    mean = sum(token_counts) / float(len(token_counts))
+    variance = sum((x - mean) ** 2 for x in token_counts) / float(len(token_counts))
+    return {
+        "mean": max(80.0, mean),
+        "stddev": math.sqrt(max(0.0, variance)),
+        "min": min(token_counts),
+        "max": max(token_counts),
+    }
+
+
+def _attach_estimate_stddev(record: Dict[str, Any], *, input_stddev_tokens: float, output_stddev_tokens: float, systematic_ratio: float = 0.30) -> Dict[str, Any]:
+    token_variance_cost = make_cost_record(
+        stage=record.get("stage") or "unknown",
+        model=record.get("model") or "mixed",
+        input_tokens=int(max(0.0, input_stddev_tokens)),
+        output_tokens=int(max(0.0, output_stddev_tokens)),
+        estimated=True,
+    )
+    token_cost_stddev = float(token_variance_cost.get("costEur") or 0.0)
+    systematic_cost_stddev = float(record.get("costEur") or 0.0) * max(0.0, systematic_ratio)
+    stddev_eur = math.sqrt((token_cost_stddev ** 2) + (systematic_cost_stddev ** 2))
+    record["standardDeviationEur"] = round(stddev_eur, 8)
+    record["standardDeviationFormatted"] = format_eur(record["standardDeviationEur"])
+    return record
+
+
+def _attach_summary_stddev(summary: Dict[str, Any]) -> Dict[str, Any]:
+    records = list(summary.get("records") or [])
+    by_stage = summary.get("byStage") or {}
+    total_variance = 0.0
+    for stage, bucket in by_stage.items():
+        stage_variance = 0.0
+        for record in records:
+            if str(record.get("stage") or "unknown") == stage:
+                stage_variance += float(record.get("standardDeviationEur") or 0.0) ** 2
+        stddev = math.sqrt(stage_variance)
+        bucket["standardDeviationEur"] = round(stddev, 8)
+        bucket["standardDeviationFormatted"] = format_eur(stddev)
+        total_variance += stage_variance
+    total_stddev = math.sqrt(total_variance)
+    total = summary.get("total") or {}
+    total["standardDeviationEur"] = round(total_stddev, 8)
+    total["standardDeviationFormatted"] = format_eur(total_stddev)
+    summary["total"] = total
+    return summary
+
+
 def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], settings: Dict[str, Any], models: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     del provider
     models = models or {}
     q_count = len(questions)
-    sample_text = "\n".join(str(q.get("questionText") or "") for q in questions[: min(20, q_count)])
-    avg_question_tokens = max(80, estimate_tokens_from_text(sample_text) // max(1, min(20, q_count)))
+    token_stats = _question_payload_token_stats(questions)
+    avg_question_tokens = int(math.ceil(float(token_stats["mean"])))
+    question_stddev_tokens = float(token_stats["stddev"])
     knowledge_tokens = max(0, int(settings.get("knowledge_max_chars", 0) or 0) // 4)
-    base_input = avg_question_tokens + knowledge_tokens + 900
+
+    # The earlier estimate used questionText only and a small fixed overhead,
+    # which missed answer payloads, structured-output schemas, topic candidates,
+    # system prompts, provider wrappers, and occasional retry/repair context. Use
+    # a calibration multiplier so the displayed point estimate is deliberately
+    # closer to observed billed totals while the stddev communicates spread.
+    prompt_schema_overhead_tokens = 1800
+    calibration_multiplier = 1.65
+    base_input = int((avg_question_tokens + knowledge_tokens + prompt_schema_overhead_tokens) * calibration_multiplier)
 
     # Estimate run ratios from the same knobs that decide whether expensive LLM
     # passes run in the processor. This keeps tuning totals aligned with enabled
-    # disabled cost points instead of pricing every optional pass unconditionally.
-    pass_b_ratio = max(0.10, min(0.95, 1.0 - float(settings.get("trigger_answer_conf", 0.82) or 0.82) + 0.37))
+    # and disabled cost points instead of pricing every optional pass unconditionally.
+    pass_b_ratio = max(0.20, min(0.95, 1.0 - float(settings.get("trigger_answer_conf", 0.82) or 0.82) + 0.45))
     review_ratio = 0.0
     if bool(settings.get("enable_review_pass", True)):
-        review_ratio = max(0.05, min(0.60, 0.45 - float(settings.get("low_conf_maintenance_threshold", 0.72) or 0.72) * 0.35))
+        review_ratio = max(0.08, min(0.70, 0.55 - float(settings.get("low_conf_maintenance_threshold", 0.72) or 0.72) * 0.38))
     reconstruction_ratio = 1.0 if bool(settings.get("enable_reconstruction_pass", True)) else 0.0
     explainer_ratio = 1.0 if bool(settings.get("enable_explainer_pass", True)) else 0.0
-    cluster_refinement_ratio = 0.20 if bool(settings.get("enable_llm_abstraction_cluster_refinement", True)) else 0.0
+    cluster_refinement_ratio = 0.30 if bool(settings.get("enable_llm_abstraction_cluster_refinement", True)) else 0.0
 
-    def llm_or_disabled(stage: str, *, enabled: bool, model: str, input_tokens: int, output_tokens: int, disabled_note: str) -> Dict[str, Any]:
+    def llm_or_disabled(
+        stage: str,
+        *,
+        enabled: bool,
+        model: str,
+        run_ratio: float,
+        input_per_call: int,
+        output_per_call: int,
+        disabled_note: str,
+        output_stddev_per_call: int,
+    ) -> Dict[str, Any]:
         if enabled:
-            return make_cost_record(stage=stage, model=model, input_tokens=input_tokens, output_tokens=output_tokens, estimated=True)
-        return _zero_cost_stage(stage, note=disabled_note)
+            expected_calls = q_count * max(0.0, run_ratio)
+            record = make_cost_record(
+                stage=stage,
+                model=model,
+                input_tokens=int(expected_calls * input_per_call),
+                output_tokens=int(expected_calls * output_per_call),
+                estimated=True,
+            )
+            input_stddev = math.sqrt(max(1.0, expected_calls)) * (question_stddev_tokens + input_per_call * 0.18)
+            output_stddev = math.sqrt(max(1.0, expected_calls)) * output_stddev_per_call
+            record["estimatedCallCount"] = round(expected_calls, 4)
+            return _attach_estimate_stddev(record, input_stddev_tokens=input_stddev, output_stddev_tokens=output_stddev)
+        record = _zero_cost_stage(stage, note=disabled_note)
+        record["standardDeviationEur"] = 0.0
+        record["standardDeviationFormatted"] = format_eur(0.0)
+        record["estimatedCallCount"] = 0.0
+        return record
 
     records = [
         _zero_cost_stage("initialization_and_loading", note="Datei-/Schema-/Knowledge-Initialisierung; keine LLM-Tokens."),
         _zero_cost_stage("preprocessing_gates", note="Deterministische Qualitäts-/Gate-Prüfung; keine LLM-Tokens."),
         _zero_cost_stage("retrieval_and_context_building", note="Knowledge-Retrieval und Kontextaufbau; keine LLM-Tokens."),
-        make_cost_record(stage="pass_a", model=models.get("passA") or models.get("pass_a") or "gpt-5.4-nano", input_tokens=q_count * base_input, output_tokens=q_count * 900, estimated=True),
+        llm_or_disabled(
+            "pass_a",
+            enabled=True,
+            model=models.get("passA") or models.get("pass_a") or "gpt-5.4-nano",
+            run_ratio=1.0,
+            input_per_call=base_input,
+            output_per_call=1250,
+            output_stddev_per_call=450,
+            disabled_note="Pass A ist Basisbestandteil und wird nicht deaktiviert.",
+        ),
         llm_or_disabled(
             "pass_b",
             enabled=pass_b_ratio > 0,
             model=models.get("passB") or models.get("pass_b") or models.get("passA") or "gpt-5.4-nano",
-            input_tokens=int(q_count * pass_b_ratio * (base_input + 700)),
-            output_tokens=int(q_count * pass_b_ratio * 750),
+            run_ratio=pass_b_ratio,
+            input_per_call=base_input + 1100,
+            output_per_call=1000,
+            output_stddev_per_call=400,
             disabled_note="Pass B ist durch die Tuning-Parameter faktisch deaktiviert; keine LLM-Tokens.",
         ),
         llm_or_disabled(
             "review",
             enabled=review_ratio > 0,
             model=models.get("review") or models.get("passB") or "gpt-5.4-nano",
-            input_tokens=int(q_count * review_ratio * (base_input + 1200)),
-            output_tokens=int(q_count * review_ratio * 900),
+            run_ratio=review_ratio,
+            input_per_call=base_input + 1500,
+            output_per_call=1100,
+            output_stddev_per_call=500,
             disabled_note="Review-Pass ist deaktiviert; keine LLM-Tokens.",
         ),
         _zero_cost_stage("content_and_image_clustering", note="Deterministisches Text-/Bild-Clustering; keine LLM-Tokens."),
@@ -182,8 +286,10 @@ def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], s
             "abstraction_cluster_refinement",
             enabled=cluster_refinement_ratio > 0,
             model=models.get("cluster_refinement") or models.get("clusterRefinement") or models.get("passA") or "gpt-5.4-nano",
-            input_tokens=max(0, int(q_count * cluster_refinement_ratio * (base_input + 900))),
-            output_tokens=max(0, int(q_count * cluster_refinement_ratio * 500)),
+            run_ratio=cluster_refinement_ratio,
+            input_per_call=base_input + 1400,
+            output_per_call=750,
+            output_stddev_per_call=350,
             disabled_note="LLM-Abstraktionscluster-Refinement ist deaktiviert; keine LLM-Tokens.",
         ),
         _zero_cost_stage("repeat_reconstruction", note="Repeat-Reconstruction gleicht Frage-/Antwortmuster deterministisch über Cluster/Jahrgänge ab; keine LLM-Tokens."),
@@ -191,25 +297,38 @@ def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], s
             "reconstruction",
             enabled=reconstruction_ratio > 0,
             model=models.get("reconstruction") or "gpt-5.4-nano",
-            input_tokens=int(q_count * reconstruction_ratio * (base_input + 1000)),
-            output_tokens=int(q_count * reconstruction_ratio * 1000),
+            run_ratio=reconstruction_ratio,
+            input_per_call=base_input + 1600,
+            output_per_call=1300,
+            output_stddev_per_call=550,
             disabled_note="Rekonstruktions-Pass ist deaktiviert; keine LLM-Tokens.",
         ),
         llm_or_disabled(
             "explainer",
             enabled=explainer_ratio > 0,
             model=models.get("explainer") or models.get("passA") or "gpt-5.4-nano",
-            input_tokens=int(q_count * explainer_ratio * (base_input + 800)),
-            output_tokens=int(q_count * explainer_ratio * 1100),
+            run_ratio=explainer_ratio,
+            input_per_call=base_input + 1200,
+            output_per_call=1500,
+            output_stddev_per_call=650,
             disabled_note="Explainer-Pass ist deaktiviert; keine LLM-Tokens.",
         ),
         _zero_cost_stage("output_and_cost_report", note="Ausgabe-/Kostenreport-Schreiben; keine LLM-Tokens."),
     ]
-    summary = add_records(records)
+    for record in records:
+        record.setdefault("standardDeviationEur", 0.0)
+        record.setdefault("standardDeviationFormatted", format_eur(0.0))
+    summary = _attach_summary_stddev(add_records(records))
     summary["assumptions"] = {
         "question_count": q_count,
         "avg_question_tokens": avg_question_tokens,
+        "question_token_stddev": round(question_stddev_tokens, 4),
+        "question_token_min": int(token_stats["min"]),
+        "question_token_max": int(token_stats["max"]),
         "knowledge_tokens_per_question": knowledge_tokens,
+        "prompt_schema_overhead_tokens": prompt_schema_overhead_tokens,
+        "calibration_multiplier": calibration_multiplier,
+        "standard_deviation_includes": ["question_payload_spread", "expected_output_spread", "30_percent_systematic_estimation_uncertainty"],
         "pass_b_run_ratio": round(pass_b_ratio, 4),
         "review_run_ratio": round(review_ratio, 4),
         "reconstruction_run_ratio": reconstruction_ratio,
@@ -217,7 +336,7 @@ def estimate_analysis_costs(*, provider: str, questions: List[Dict[str, Any]], s
         "cluster_refinement_run_ratio": cluster_refinement_ratio,
         "currency": "EUR",
         "all_cost_points_listed": True,
-        "note": "Schätzung listet alle Workflow-Kostenpunkte. Deaktivierte oder deterministische Schritte bleiben als 0-€-Records in der Aufschlüsselung sichtbar. LLM-Pässe werden per Zeichen-/Token-Heuristik, statischer Provider-Preistabelle und USD-EUR-Umrechnung geschätzt; tatsächliche Tokens werden im Lauf aus API-Usage inklusive Retry-Versuchen getrackt.",
+        "note": "Schätzung listet alle Workflow-Kostenpunkte. Deaktivierte oder deterministische Schritte bleiben als 0-€-Records in der Aufschlüsselung sichtbar. Die Schätzung nutzt vollständige Frage-Payloads statt nur questionText, enthält Prompt-/Schema-Overhead und einen Kalibrierungsfaktor gegen systematische Untererfassung; tatsächliche Tokens werden im Lauf aus API-Usage inklusive Retry-Versuchen getrackt.",
     }
     return summary
 
@@ -327,10 +446,13 @@ def recommend_settings(*, provider: str, api_key: str, model: str, topic_tree: A
     estimate = estimate_analysis_costs(provider=provider, questions=questions, settings={**effective_current, **settings}, models=models or {"passB": model})
     estimate["profileEstimates"] = estimate_quality_profile_costs(provider=provider, questions=questions, current={**effective_current, **settings})
     estimate["tuningRequest"] = tuning_request_cost
-    total_cost = float((estimate.get("total") or {}).get("costEur") or 0.0)
+    total_payload = estimate.get("total") or {}
+    total_cost = float(total_payload.get("costEur") or 0.0)
+    total_stddev = float(total_payload.get("standardDeviationEur") or 0.0)
     tuning_cost = float(tuning_request_cost.get("costEur") or 0.0)
     report = (report + "\n\n" if report else "") + (
-        f"Geschätzte Gesamtkosten der Analyse: {format_eur(total_cost)} (Details in cost_estimate).\n"
+        f"Geschätzte Gesamtkosten der Analyse: {format_eur(total_cost)} "
+        f"± {format_eur(total_stddev)} Standardabweichung (Details in cost_estimate).\n"
         f"Kosten dieser Parameter-Abfrage: {format_eur(tuning_cost)}."
     )
     return settings, report, estimate
