@@ -9,6 +9,7 @@ CONFIG = {
     "CHECKPOINT_EVERY": 10,
     "SLEEP": 0.15,
     "LLM_PROVIDER": "openai",
+    "QUALITY_COST_PROFILE": "quality",
     "PASSA_MODEL": "gpt-5.4-mini",
     "PASSB_MODEL": "gpt-5.5",
     "PASSA_MODEL_GEMINI": "gemini-3.5-flash",

@@ -8,8 +8,12 @@ import streamlit as st
 
 from ai_exam_analyzer.config import CONFIG
 from ai_exam_analyzer.image_store import QuestionImageStore
-from ai_exam_analyzer.io_utils import load_json
-from ai_exam_analyzer.model_profiles import apply_model_optimized_defaults, derive_workflow_budget
+from ai_exam_analyzer.io_utils import load_json, save_json
+from ai_exam_analyzer.model_profiles import (
+    QUALITY_PROFILE_LABELS,
+    QUALITY_PROFILE_OPTIONS,
+    get_quality_cost_profile,
+)
 from ai_exam_analyzer.knowledge_base import (
     build_knowledge_base_from_zip,
     load_index_json,
@@ -83,6 +87,103 @@ def _get_default_documents_dir() -> str:
     if os.path.isdir(documents_dir):
         return documents_dir
     return home_dir
+
+
+def _profile_defaults_for_widgets(provider: str, profile_name: str) -> Dict[str, Any]:
+    profile = get_quality_cost_profile(provider=provider, profile=profile_name)
+    return {
+        "pass_a_temperature": profile.pass_a_temperature,
+        "pass_b_reasoning_effort": profile.pass_b_reasoning_effort,
+        "trigger_answer_conf": profile.trigger_answer_conf,
+        "trigger_topic_conf": profile.trigger_topic_conf,
+        "apply_change_min_conf_b": profile.apply_change_min_conf_b,
+        "low_conf_maintenance_threshold": profile.low_conf_maintenance_threshold,
+        "knowledge_top_k": profile.knowledge_top_k,
+        "knowledge_max_chars": profile.knowledge_max_chars,
+        "knowledge_min_score": profile.knowledge_min_score,
+        "enable_review_pass": profile.enable_review_pass,
+        "enable_reconstruction_pass": profile.enable_reconstruction_pass,
+    }
+
+
+def _apply_settings_to_ui_state(settings: Dict[str, Any]) -> None:
+    provider = str(settings.get("llm_provider") or st.session_state.get("llm_provider") or CONFIG["LLM_PROVIDER"])
+    if provider not in {"openai", "gemini"}:
+        provider = str(CONFIG["LLM_PROVIDER"])
+
+    profile_name = str(settings.get("quality_cost_profile") or st.session_state.get("quality_cost_profile") or CONFIG["QUALITY_COST_PROFILE"])
+    if profile_name not in QUALITY_PROFILE_OPTIONS:
+        profile_name = str(CONFIG["QUALITY_COST_PROFILE"])
+
+    st.session_state["llm_provider"] = provider
+    st.session_state["quality_cost_profile"] = profile_name
+    st.session_state[f"{provider}_last_applied_quality_cost_profile"] = profile_name
+
+    merged = _profile_defaults_for_widgets(provider, profile_name)
+    merged.update(settings)
+
+    key_map = {
+        "resume": "resume",
+        "limit": "limit",
+        "checkpoint_every": "checkpoint_every",
+        "sleep": "sleep_seconds",
+        "text_cluster_similarity": "text_cluster_similarity",
+        "abstraction_cluster_similarity": "abstraction_cluster_similarity",
+        "review_min_maintenance_severity": "review_min_maintenance_severity",
+        "enable_repeat_reconstruction": "enable_repeat_reconstruction",
+        "auto_apply_repeat_reconstruction": "auto_apply_repeat_reconstruction",
+        "repeat_min_similarity": "repeat_min_similarity",
+        "repeat_min_anchor_conf": "repeat_min_anchor_conf",
+        "repeat_min_anchor_consensus": "repeat_min_anchor_consensus",
+        "repeat_min_match_ratio": "repeat_min_match_ratio",
+        "enable_explainer_pass": "enable_explainer_pass",
+        "write_top_level": "write_top_level",
+        "debug": "debug",
+        "knowledge_subject_hint": "knowledge_subject_hint",
+        "knowledge_chunk_chars": "knowledge_chunk_chars",
+        "pass_a_temperature": f"{provider}_pass_a_temperature",
+        "passA_temperature": f"{provider}_pass_a_temperature",
+        "pass_b_reasoning_effort": f"{provider}_pass_b_reasoning_effort",
+        "passB_reasoning_effort": f"{provider}_pass_b_reasoning_effort",
+        "trigger_answer_conf": f"{provider}_trigger_answer_conf",
+        "trigger_topic_conf": f"{provider}_trigger_topic_conf",
+        "apply_change_min_conf_b": f"{provider}_apply_change_min_conf_b",
+        "low_conf_maintenance_threshold": f"{provider}_low_conf_maintenance_threshold",
+        "knowledge_top_k": f"{provider}_knowledge_top_k",
+        "knowledge_max_chars": f"{provider}_knowledge_max_chars",
+        "knowledge_min_score": f"{provider}_knowledge_min_score",
+        "enable_review_pass": f"{provider}_enable_review_pass",
+        "enable_reconstruction_pass": f"{provider}_enable_reconstruction_pass",
+    }
+    for cfg_key, state_key in key_map.items():
+        if cfg_key in merged:
+            st.session_state[state_key] = merged[cfg_key]
+    if "only_question_ids" in merged and isinstance(merged["only_question_ids"], list):
+        st.session_state["only_question_ids_raw"] = ", ".join(str(x) for x in merged["only_question_ids"])
+
+
+def _sync_profile_defaults_when_changed(provider: str, profile_name: str) -> None:
+    state_key = f"{provider}_last_applied_quality_cost_profile"
+    previous = st.session_state.get(state_key)
+    if previous == profile_name:
+        return
+    profile_defaults = _profile_defaults_for_widgets(provider, profile_name)
+    key_map = {
+        "pass_a_temperature": f"{provider}_pass_a_temperature",
+        "pass_b_reasoning_effort": f"{provider}_pass_b_reasoning_effort",
+        "trigger_answer_conf": f"{provider}_trigger_answer_conf",
+        "trigger_topic_conf": f"{provider}_trigger_topic_conf",
+        "apply_change_min_conf_b": f"{provider}_apply_change_min_conf_b",
+        "low_conf_maintenance_threshold": f"{provider}_low_conf_maintenance_threshold",
+        "knowledge_top_k": f"{provider}_knowledge_top_k",
+        "knowledge_max_chars": f"{provider}_knowledge_max_chars",
+        "knowledge_min_score": f"{provider}_knowledge_min_score",
+        "enable_review_pass": f"{provider}_enable_review_pass",
+        "enable_reconstruction_pass": f"{provider}_enable_reconstruction_pass",
+    }
+    for cfg_key, value in profile_defaults.items():
+        st.session_state[key_map[cfg_key]] = value
+    st.session_state[state_key] = profile_name
 
 
 def _pick_directory(initial_dir: str) -> Optional[str]:
@@ -182,11 +283,6 @@ def _file_picker_row(*, state_key: str, label: str, default_path: str, start_dir
 
 
 def _build_args() -> SimpleNamespace:
-    pending_widget_updates = st.session_state.pop("_pending_widget_updates", None)
-    if isinstance(pending_widget_updates, dict):
-        for key, value in pending_widget_updates.items():
-            st.session_state[key] = value
-
     if "data_folder" not in st.session_state:
         st.session_state["data_folder"] = _get_default_documents_dir()
     if "output_folder" not in st.session_state:
@@ -213,6 +309,7 @@ def _build_args() -> SimpleNamespace:
         is_postprocess_only = (run_mode in {"Postprocessing only", "Explainer only"})
         is_explainer_only = (run_mode == "Explainer only")
         is_tuning_only = (run_mode == "Parameter-Einstellung")
+        is_full_analysis = (run_mode == "Vollständige Analyse")
 
         with st.expander("📁 Datenquellen", expanded=True):
             st.caption("Datenordner (Standard für Dateiauswahl)")
@@ -247,10 +344,13 @@ def _build_args() -> SimpleNamespace:
             defaults = [
                 ("Input", input_default_name),
                 ("Topic-Tree", topics_default_name),
-                ("Output", output_status_name),
-                ("Bilder ZIP", images_zip_default_name),
-                ("Knowledge ZIP", knowledge_zip_default_name),
             ]
+            if not is_tuning_only:
+                defaults.append(("Output", output_status_name))
+            if is_full_analysis:
+                defaults.append(("Bilder ZIP", images_zip_default_name))
+            if is_full_analysis or is_tuning_only:
+                defaults.append(("Knowledge ZIP", knowledge_zip_default_name))
             st.caption("Status im Datenordner (Standarddateien):")
             for label, name in defaults:
                 path = _resolve_path(folder=data_folder, filename=name)
@@ -277,27 +377,34 @@ def _build_args() -> SimpleNamespace:
             else:
                 output_default_path = derived_output_path
 
-            output_path = _file_picker_row(
-                state_key="output_file",
-                label="Output JSON",
-                default_path=output_default_path,
-                start_dir=output_folder,
-                help_text="Zieldatei für annotierte Ausgabe (wird automatisch erstellt).",
-                require_existing=False,
-            )
+            if is_tuning_only:
+                output_path = output_default_path
+            else:
+                output_path = _file_picker_row(
+                    state_key="output_file",
+                    label="Output JSON",
+                    default_path=output_default_path,
+                    start_dir=output_folder,
+                    help_text="Zieldatei für annotierte Ausgabe (wird automatisch erstellt).",
+                    require_existing=False,
+                )
 
-            only_question_ids_raw = st.text_input(
-                "Nur diese Frage-ID(s) verarbeiten (optional)",
-                value="",
-                help="Kommagetrennte IDs; leer = alle Fragen.",
-            )
+            if is_tuning_only:
+                only_question_ids_raw = ""
+            else:
+                only_question_ids_raw = st.text_input(
+                    "Nur diese Frage-ID(s) verarbeiten (optional)",
+                    value="",
+                    key="only_question_ids_raw",
+                    help="Kommagetrennte IDs; leer = alle Fragen. Wenige IDs sind hilfreich für Tests oder Nachläufe; leer verarbeitet den gesamten Datensatz.",
+                )
             analysis_config_default_name = "analysis_config.json"
             analysis_config_path = _file_picker_row(
                 state_key="analysis_config_file",
                 label="Analyse-Konfig JSON",
                 default_path=_resolve_path(folder=data_folder, filename=analysis_config_default_name),
                 start_dir=data_folder,
-                help_text="Konfig mit Parametern aus Parameter-Einstellung (wird automatisch erkannt).",
+                help_text="Konfig mit Parametern aus Parameter-Einstellung. Sie wird erst durch 'Einstellungen anwenden' übernommen.",
                 optional=True,
             )
             save_tuning_config_path = _file_picker_row(
@@ -310,79 +417,94 @@ def _build_args() -> SimpleNamespace:
                 require_existing=False,
             ) if is_tuning_only else analysis_config_path
 
-            if (not is_tuning_only) and (not is_postprocess_only) and analysis_config_path and os.path.exists(analysis_config_path):
-                try:
-                    loaded_cfg = load_json(analysis_config_path)
-                    if isinstance(loaded_cfg, dict):
-                        provider_prefix = str(st.session_state.get("llm_provider", "openai"))
-                        cfg_to_widget = {
-                            "trigger_answer_conf": f"{provider_prefix}_trigger_answer_conf",
-                            "trigger_topic_conf": f"{provider_prefix}_trigger_topic_conf",
-                            "apply_change_min_conf_b": f"{provider_prefix}_apply_change_min_conf_b",
-                            "low_conf_maintenance_threshold": f"{provider_prefix}_low_conf_maintenance_threshold",
-                            "knowledge_top_k": f"{provider_prefix}_knowledge_top_k",
-                            "knowledge_max_chars": f"{provider_prefix}_knowledge_max_chars",
-                            "knowledge_min_score": f"{provider_prefix}_knowledge_min_score",
-                        }
-                        for ck, wk in cfg_to_widget.items():
-                            if ck in loaded_cfg:
-                                st.session_state[wk] = loaded_cfg[ck]
-                except Exception:
-                    pass
+            if (not is_tuning_only) and (not is_postprocess_only):
+                config_cols = st.columns([1, 3])
+                with config_cols[0]:
+                    apply_config = st.button(
+                        "Einstellungen anwenden",
+                        key="apply_analysis_config",
+                        disabled=not (analysis_config_path and os.path.exists(analysis_config_path)),
+                        help="Lädt die Analyse-Konfig aktiv in die UI. Danach können alle Werte weiter angepasst werden.",
+                    )
+                with config_cols[1]:
+                    if analysis_config_path and os.path.exists(analysis_config_path):
+                        st.caption("Konfig gefunden. Sie wird erst nach Klick auf **Einstellungen anwenden** übernommen.")
+                    elif analysis_config_path:
+                        st.caption("Konfig-Datei noch nicht gefunden.")
+                if apply_config:
+                    try:
+                        loaded_cfg = load_json(analysis_config_path)
+                        if not isinstance(loaded_cfg, dict):
+                            raise ValueError("Analyse-Konfig muss ein JSON-Objekt sein.")
+                        if isinstance(loaded_cfg.get("settings"), dict):
+                            loaded_cfg = loaded_cfg["settings"]
+                        _apply_settings_to_ui_state(loaded_cfg)
+                        st.session_state["analysis_config_applied_path"] = analysis_config_path
+                        st.success("Einstellungen aus der Analyse-Konfig wurden in die UI übernommen.")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"Analyse-Konfig konnte nicht geladen werden: {exc}")
 
             cleanup_spec = ""
 
-            images_default_path = _resolve_path(folder=data_folder, filename=images_zip_default_name)
-            images_default_exists = os.path.exists(images_default_path)
-            use_images_zip = st.checkbox(
-                "Fragenbilder ZIP nutzen",
-                value=images_default_exists,
-                help="Wenn aktiv, werden Fragebilder aus einer ZIP geladen und dem Modell mitgegeben.",
-            )
-            if not images_default_exists:
-                st.caption("ℹ️ `images.zip` nicht im Input-Ordner gefunden – Nutzung standardmäßig aus, manuelle Auswahl weiterhin möglich.")
-            images_zip = _file_picker_row(
-                state_key="images_zip_file",
-                label="Fragenbilder ZIP",
-                default_path=_resolve_path(folder=data_folder, filename=images_zip_default_name),
-                start_dir=data_folder,
-                help_text="ZIP mit Fragebildern (Dateinamen enthalten die Frage-ID).",
-                optional=True,
-            ) if use_images_zip else ""
+            if is_full_analysis:
+                images_default_path = _resolve_path(folder=data_folder, filename=images_zip_default_name)
+                images_default_exists = os.path.exists(images_default_path)
+                use_images_zip = st.checkbox(
+                    "Fragenbilder ZIP nutzen",
+                    value=images_default_exists,
+                    help="Wenn aktiv, werden Fragebilder aus einer ZIP geladen und dem Modell mitgegeben. Das ist nur in der vollständigen Analyse relevant; Postprocessing und Parameter-Einstellung nutzen keine Fragebilder.",
+                )
+                if not images_default_exists:
+                    st.caption("ℹ️ `images.zip` nicht im Input-Ordner gefunden – Nutzung standardmäßig aus, manuelle Auswahl weiterhin möglich.")
+                images_zip = _file_picker_row(
+                    state_key="images_zip_file",
+                    label="Fragenbilder ZIP",
+                    default_path=_resolve_path(folder=data_folder, filename=images_zip_default_name),
+                    start_dir=data_folder,
+                    help_text="ZIP mit Fragebildern (Dateinamen enthalten die Frage-ID).",
+                    optional=True,
+                ) if use_images_zip else ""
+            else:
+                images_zip = ""
 
-            knowledge_default_path = _resolve_path(folder=data_folder, filename=knowledge_zip_default_name)
-            knowledge_default_exists = os.path.exists(knowledge_default_path)
-            use_knowledge_zip = st.checkbox(
-                "Knowledge ZIP nutzen",
-                value=knowledge_default_exists,
-                help="Wenn aktiv, wird Wissen aus einer ZIP-Datei geladen.",
-            )
-            if not knowledge_default_exists:
-                st.caption("ℹ️ `knowledge.zip` nicht im Input-Ordner gefunden – Nutzung standardmäßig aus, manuelle Auswahl weiterhin möglich.")
-            knowledge_zip = _file_picker_row(
-                state_key="knowledge_zip_file",
-                label="Knowledge ZIP",
-                default_path=_resolve_path(folder=data_folder, filename=knowledge_zip_default_name),
-                start_dir=data_folder,
-                help_text="ZIP mit Wissensdokumenten (PDF/TXT/MD).",
-                optional=True,
-            ) if use_knowledge_zip else ""
+            if is_full_analysis or is_tuning_only:
+                knowledge_default_path = _resolve_path(folder=data_folder, filename=knowledge_zip_default_name)
+                knowledge_default_exists = os.path.exists(knowledge_default_path)
+                use_knowledge_zip = st.checkbox(
+                    "Knowledge ZIP nutzen",
+                    value=knowledge_default_exists,
+                    help="Wenn aktiv, wird Wissen aus einer ZIP-Datei geladen. Relevant für vollständige Analyse und Parameter-Einstellung; reine Postprocessing-Modi verwenden bestehende aiAudit-Daten.",
+                )
+                if not knowledge_default_exists:
+                    st.caption("ℹ️ `knowledge.zip` nicht im Input-Ordner gefunden – Nutzung standardmäßig aus, manuelle Auswahl weiterhin möglich.")
+                knowledge_zip = _file_picker_row(
+                    state_key="knowledge_zip_file",
+                    label="Knowledge ZIP",
+                    default_path=_resolve_path(folder=data_folder, filename=knowledge_zip_default_name),
+                    start_dir=data_folder,
+                    help_text="ZIP mit Wissensdokumenten (PDF/TXT/MD).",
+                    optional=True,
+                ) if use_knowledge_zip else ""
 
-            knowledge_index_default_path = _resolve_path(folder=data_folder, filename=knowledge_index_default_name)
-            knowledge_index_default_exists = os.path.exists(knowledge_index_default_path)
-            use_knowledge_index = st.checkbox(
-                "Knowledge-Index nutzen",
-                value=knowledge_index_default_exists,
-                help="Optionaler Index für schnelleren Start; wird geladen/geschrieben.",
-            )
-            knowledge_index = _file_picker_row(
-                state_key="knowledge_index_file",
-                label="Knowledge Index JSON",
-                default_path=_resolve_path(folder=data_folder, filename=knowledge_index_default_name),
-                start_dir=data_folder,
-                help_text="Optionaler Index-Cache als JSON.",
-                optional=True,
-            ) if use_knowledge_index else ""
+                knowledge_index_default_path = _resolve_path(folder=data_folder, filename=knowledge_index_default_name)
+                knowledge_index_default_exists = os.path.exists(knowledge_index_default_path)
+                use_knowledge_index = st.checkbox(
+                    "Knowledge-Index nutzen",
+                    value=knowledge_index_default_exists,
+                    help="Optionaler Index für schnelleren Start; wird geladen/geschrieben. Nicht relevant für reine Postprocessing-Modi.",
+                )
+                knowledge_index = _file_picker_row(
+                    state_key="knowledge_index_file",
+                    label="Knowledge Index JSON",
+                    default_path=_resolve_path(folder=data_folder, filename=knowledge_index_default_name),
+                    start_dir=data_folder,
+                    help_text="Optionaler Index-Cache als JSON.",
+                    optional=True,
+                ) if use_knowledge_index else ""
+            else:
+                knowledge_zip = ""
+                knowledge_index = ""
 
             inferred_subject_hint = _infer_subject_hint_from_topic_tree(topics_path)
             subject_hint_default = inferred_subject_hint or CONFIG["KNOWLEDGE_SUBJECT_HINT"]
@@ -404,7 +526,8 @@ def _build_args() -> SimpleNamespace:
                 "LLM Provider",
                 options=["openai", "gemini"],
                 index=0 if CONFIG["LLM_PROVIDER"] == "openai" else 1,
-                help="Wählt den verwendeten Modellanbieter für den gesamten Workflow.",
+                key="llm_provider",
+                help="Wählt den Modellanbieter für alle KI-Schritte. OpenAI und Gemini verwenden unterschiedliche Modellnamen, Kostenstrukturen und Kontextfenster. Ein Wechsel setzt provider-spezifische Profildefaults; danach können die angezeigten Parameter weiter angepasst werden.",
             )
             key_env = "OPENAI_API_KEY" if llm_provider == "openai" else "GEMINI_API_KEY"
             api_key_value = os.getenv(key_env, "")
@@ -412,256 +535,431 @@ def _build_args() -> SimpleNamespace:
                 f"{llm_provider.title()} API Key",
                 type="password",
                 value=api_key_value,
-                help="API-Key für den Zugriff auf die gewählten Modelle.",
+                help="API-Key für den Zugriff auf den gewählten Provider. Der Key wird für diese Sitzung als Umgebungsvariable gesetzt, aber nicht in gespeicherte UI-Konfigurationen geschrieben.",
             )
-            default_pass_a_model = CONFIG["PASSA_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSA_MODEL"]
-            default_pass_b_model = CONFIG["PASSB_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSB_MODEL"]
-            default_review_model = CONFIG["REVIEW_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["REVIEW_MODEL"]
-            default_reconstruction_model = CONFIG["RECONSTRUCTION_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["RECONSTRUCTION_MODEL"]
-            default_explainer_model = CONFIG["EXPLAINER_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["EXPLAINER_MODEL"]
-            provider_defaults = _provider_ui_defaults(llm_provider)
-            kb_budget_defaults = derive_workflow_budget(
-                provider=llm_provider,
-                pass_a_model=default_pass_a_model,
-                pass_b_model=default_pass_b_model,
-                default_top_k=int(CONFIG["KNOWLEDGE_TOP_K"]),
-                default_max_chars=int(CONFIG["KNOWLEDGE_MAX_CHARS"]),
-                default_min_score=float(CONFIG["KNOWLEDGE_MIN_SCORE"]),
+            profile_default = str(CONFIG.get("QUALITY_COST_PROFILE", "quality"))
+            profile_default_index = QUALITY_PROFILE_OPTIONS.index(profile_default) if profile_default in QUALITY_PROFILE_OPTIONS else 1
+            quality_cost_profile = st.selectbox(
+                "Priorität",
+                options=QUALITY_PROFILE_OPTIONS,
+                index=profile_default_index,
+                key="quality_cost_profile",
+                format_func=lambda value: QUALITY_PROFILE_LABELS.get(value, value),
+                help="Wählt ein abgestimmtes Start-Set aus Modellen, Reasoning-Aufwand, Confidence-Schwellen, Knowledge-Budget und optionalen teuren Schritten. Richtung Qualität nutzt stärkere Modelle und mehr Kontext, kostet aber mehr. Richtung Kostenoptimierung reduziert Modellstärke, Reasoning und Kontext; danach bleiben die Detailwerte manuell anpassbar.",
             )
-            default_pass_a_model = CONFIG["PASSA_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSA_MODEL"]
-            default_pass_b_model = CONFIG["PASSB_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["PASSB_MODEL"]
-            default_review_model = CONFIG["REVIEW_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["REVIEW_MODEL"]
-            default_reconstruction_model = CONFIG["RECONSTRUCTION_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["RECONSTRUCTION_MODEL"]
-            default_explainer_model = CONFIG["EXPLAINER_MODEL_GEMINI"] if llm_provider == "gemini" else CONFIG["EXPLAINER_MODEL"]
+            _sync_profile_defaults_when_changed(llm_provider, quality_cost_profile)
+            selected_profile = get_quality_cost_profile(provider=llm_provider, profile=quality_cost_profile)
+            default_pass_a_model = selected_profile.pass_a_model
+            default_pass_b_model = selected_profile.pass_b_model
+            default_review_model = selected_profile.review_model
+            default_reconstruction_model = selected_profile.reconstruction_model
+            default_explainer_model = selected_profile.explainer_model
+            provider_defaults = {
+                "pass_a_temperature": selected_profile.pass_a_temperature,
+                "pass_b_reasoning_effort": selected_profile.pass_b_reasoning_effort,
+                "trigger_answer_conf": selected_profile.trigger_answer_conf,
+                "trigger_topic_conf": selected_profile.trigger_topic_conf,
+                "apply_change_min_conf_b": selected_profile.apply_change_min_conf_b,
+                "low_conf_maintenance_threshold": selected_profile.low_conf_maintenance_threshold,
+            }
+            kb_budget_defaults = selected_profile
+            st.caption(
+                f"Aktives Set: Pass A `{default_pass_a_model}`, Pass B `{default_pass_b_model}`, "
+                f"Review/Reconstruction `{default_reconstruction_model}`. "
+                "Für Feinsteuerung später kann diese Auswahl erweitert werden."
+            )
         auto_dataset_tuning = bool(is_tuning_only)
 
-        with st.expander("⚙️ Pipeline", expanded=False):
-            checkpoint_every = st.number_input(
-                "Checkpoint alle N Fragen",
-                min_value=1,
-                value=int(CONFIG["CHECKPOINT_EVERY"]),
-                help="Speichert regelmäßig Zwischenergebnisse.",
-            )
+        checkpoint_every = int(CONFIG["CHECKPOINT_EVERY"])
+        text_cluster_similarity = float(CONFIG["TEXT_CLUSTER_SIMILARITY"])
+        abstraction_cluster_similarity = float(CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"])
+        enable_review_pass = False if is_explainer_only else bool(selected_profile.enable_review_pass)
+        review_min_maintenance_severity = int(CONFIG["REVIEW_MIN_MAINTENANCE_SEVERITY"])
+        enable_reconstruction_pass = False if is_explainer_only else bool(selected_profile.enable_reconstruction_pass)
+        force_rerun_review = False
+        force_rerun_reconstruction = False
+        force_rerun_explainer = False
+        resume = bool(CONFIG["RESUME"])
+        limit = int(CONFIG["LIMIT"])
+        sleep_seconds = float(CONFIG["SLEEP"])
+        pass_a_model = str(default_pass_a_model)
+        pass_b_model = str(default_pass_b_model)
+        review_model = str(default_review_model)
+        reconstruction_model = str(default_reconstruction_model)
+        pass_a_temperature = float(provider_defaults["pass_a_temperature"])
+        pass_b_reasoning_effort = str(provider_defaults["pass_b_reasoning_effort"])
+        trigger_answer_conf = float(provider_defaults["trigger_answer_conf"])
+        trigger_topic_conf = float(provider_defaults["trigger_topic_conf"])
+        apply_change_min_conf_b = float(provider_defaults["apply_change_min_conf_b"])
+        low_conf_maintenance_threshold = float(provider_defaults["low_conf_maintenance_threshold"])
+        enable_repeat_reconstruction = bool(CONFIG["ENABLE_REPEAT_RECONSTRUCTION"])
+        auto_apply_repeat_reconstruction = bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"])
+        repeat_min_similarity = float(CONFIG["REPEAT_MIN_SIMILARITY"])
+        repeat_min_anchor_conf = float(CONFIG["REPEAT_MIN_ANCHOR_CONF"])
+        repeat_min_anchor_consensus = int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"])
+        repeat_min_match_ratio = float(CONFIG["REPEAT_MIN_MATCH_RATIO"])
+        enable_explainer_pass = bool(CONFIG["ENABLE_EXPLAINER_PASS"])
+        explainer_model = str(default_explainer_model)
+        write_top_level = bool(CONFIG["WRITE_TOP_LEVEL"])
+        debug = bool(CONFIG["DEBUG"])
 
-            text_cluster_similarity = st.slider(
-                "Question-Cluster Similarity",
-                0.0,
-                1.0,
-                float(CONFIG["TEXT_CLUSTER_SIMILARITY"]),
-                0.01,
-                help="Ähnlichkeitsschwelle für inhaltliche Frage-Cluster (Jaccard).",
-            )
-            abstraction_cluster_similarity = st.slider(
-                "Abstraction-Cluster Similarity",
-                0.0,
-                1.0,
-                float(CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"]),
-                0.01,
-                help="Ähnlichkeitsschwelle für Cluster der Frageabstraktionen.",
-            )
-
-            enable_review_pass = st.checkbox(
-                "Pass C (Deep Review) aktivieren",
-                value=(False if is_explainer_only else bool(CONFIG["ENABLE_REVIEW_PASS"])),
-                help="Optionaler dritter Review-Pass für wartungsintensive Fragen.",
-            )
-            review_model = st.text_input(
-                "Pass C Modell",
-                value=default_review_model,
-                key=f"{llm_provider}_review_model",
-                help="Modell für den optionalen Deep-Review-Pass.",
-                disabled=not enable_review_pass,
-            )
-            review_min_maintenance_severity = st.select_slider(
-                "Pass C ab Wartungs-Severity",
-                options=[1, 2, 3],
-                value=int(CONFIG["REVIEW_MIN_MAINTENANCE_SEVERITY"]),
-                help="Pass C läuft nur ab diesem Wartungs-Schweregrad.",
-                disabled=not enable_review_pass,
-            )
-
-            enable_reconstruction_pass = st.checkbox(
-                "Reconstruction-Pass aktivieren",
-                value=(False if is_explainer_only else bool(CONFIG["ENABLE_RECONSTRUCTION_PASS"])),
-                help="Führt eine Rekonstruktions-/Altfrage-Bewertung pro Frage aus und annotiert das Ergebnis.",
-            )
-            reconstruction_model = st.text_input(
-                "Reconstruction Modell",
-                value=str(default_reconstruction_model),
-                key=f"{llm_provider}_reconstruction_model",
-                disabled=not enable_reconstruction_pass,
-            )
-
-            force_rerun_review = False
-            force_rerun_reconstruction = False
-            force_rerun_explainer = False
-
-            if is_postprocess_only:
-                st.caption("Postprocessing-only: nur fehlende/fehlerhafte Ergebnisse werden neu berechnet (optional erzwingen).")
-                force_rerun_review = st.checkbox(
-                    "Review immer neu berechnen",
-                    value=False,
-                    disabled=(is_explainer_only or not enable_review_pass),
+        if is_tuning_only:
+            st.info("Parameter-Einstellung: Es werden nur Datenquellen, API und Knowledge-Base angezeigt. Die Detailparameter werden durch die Analyse ermittelt und anschließend als Konfig gespeichert.")
+            enable_review_pass = bool(selected_profile.enable_review_pass)
+            enable_reconstruction_pass = bool(selected_profile.enable_reconstruction_pass)
+            enable_explainer_pass = False
+        elif is_explainer_only:
+            with st.expander("💬 Explainer", expanded=True):
+                enable_review_pass = False
+                enable_reconstruction_pass = False
+                enable_explainer_pass = True
+                checkpoint_every = st.number_input(
+                    "Checkpoint alle N Fragen",
+                    min_value=1,
+                    value=int(CONFIG["CHECKPOINT_EVERY"]),
+                    key="checkpoint_every",
+                    help="Auch im Explainer-only-Modus werden Zwischenergebnisse geschrieben. Niedrigere Werte reduzieren Datenverlust bei Abbruch, höhere Werte schreiben seltener.",
                 )
-                force_rerun_reconstruction = st.checkbox(
-                    "Reconstruction immer neu berechnen",
-                    value=False,
-                    disabled=(is_explainer_only or not enable_reconstruction_pass),
+                text_cluster_similarity = st.slider(
+                    "Question-Cluster Similarity",
+                    0.0,
+                    1.0,
+                    float(CONFIG["TEXT_CLUSTER_SIMILARITY"]),
+                    0.01,
+                    key="text_cluster_similarity",
+                    help="Wird im Postprocessing-Kontext zur Aktualisierung von Frage-Clustern verwendet. Niedriger gruppiert mehr, höher ist strenger.",
                 )
-                enable_explainer_pass = True if is_explainer_only else st.checkbox(
-                    "Explainer-Pass aktivieren",
-                    value=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
-                    help="Erzeugt didaktische Erklärungen auf bestehendem aiAudit.",
+                abstraction_cluster_similarity = st.slider(
+                    "Abstraction-Cluster Similarity",
+                    0.0,
+                    1.0,
+                    float(CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"]),
+                    0.01,
+                    key="abstraction_cluster_similarity",
+                    help="Wird am Ende des Postprocessing-Laufs für Abstraktionscluster genutzt. Niedriger gruppiert breiter, höher trennt stärker.",
                 )
                 force_rerun_explainer = st.checkbox(
                     "Explainer immer neu berechnen",
-                    value=is_explainer_only,
-                    disabled=not enable_explainer_pass,
+                    value=True,
+                    help="Erzwingt eine neue didaktische Erklärung für jede verarbeitete Frage. Aktiv ist im Explainer-only-Modus meist sinnvoll, weil genau dieser Schritt nachgezogen werden soll; deaktiviert würde vorhandene Erklärungen wiederverwenden.",
                 )
-                explainer_model = st.text_input(
-                    "Explainer Modell",
-                    value=str(default_explainer_model),
-                    key=f"{llm_provider}_postprocess_explainer_model",
-                    disabled=not enable_explainer_pass,
-                    help="Standard ist GPT-5.5 (OpenAI) bzw. Gemini 3.5 Flash (Gemini) für bessere didaktische Erklärungen und strukturierte Ausgabe.",
+                explainer_model = str(default_explainer_model)
+                st.caption(f"Explainer Modell: `{explainer_model}`")
+                write_top_level = st.checkbox(
+                    "Top-Level ai* Felder schreiben",
+                    value=CONFIG["WRITE_TOP_LEVEL"],
+                    key="write_top_level",
+                    help="Wird auch in Postprocessing-Läufen angewendet. Aktiv aktualisiert praktische ai*-Kurzfelder auf Fragenebene; deaktiviert verändert nur aiAudit und hält den Export schlanker.",
                 )
-                st.caption("Nicht relevant in diesem Modus: Resume, Pass A/B, Repeat-Reconstruction, Sleep/Limit.")
-                resume = False
-                limit = 0
-                sleep_seconds = 0.0
-                pass_a_model = default_pass_a_model
-                pass_b_model = default_pass_b_model
-                pass_a_temperature = float(provider_defaults["pass_a_temperature"])
-                pass_b_reasoning_effort = str(provider_defaults["pass_b_reasoning_effort"])
-                trigger_answer_conf = float(provider_defaults["trigger_answer_conf"])
-                trigger_topic_conf = float(provider_defaults["trigger_topic_conf"])
-                apply_change_min_conf_b = float(provider_defaults["apply_change_min_conf_b"])
-                low_conf_maintenance_threshold = float(provider_defaults["low_conf_maintenance_threshold"])
-                enable_repeat_reconstruction = False
-                auto_apply_repeat_reconstruction = False
-                repeat_min_similarity = float(CONFIG["REPEAT_MIN_SIMILARITY"])
-                repeat_min_anchor_conf = float(CONFIG["REPEAT_MIN_ANCHOR_CONF"])
-                repeat_min_anchor_consensus = int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"])
-                repeat_min_match_ratio = float(CONFIG["REPEAT_MIN_MATCH_RATIO"])
-                enable_explainer_pass = bool(enable_explainer_pass)
-                explainer_model = str(explainer_model)
-                write_top_level = bool(CONFIG["WRITE_TOP_LEVEL"])
-                debug = bool(CONFIG["DEBUG"])
-            else:
-                resume = st.checkbox("Resume aktiv", value=CONFIG["RESUME"], help="Überspringt bereits abgeschlossene Fragen.")
-                limit = st.number_input("Limit (0 = alle Fragen)", min_value=0, value=int(CONFIG["LIMIT"]), help="Begrenzt die Anzahl verarbeiteter Fragen.")
+        elif is_postprocess_only:
+            with st.expander("⚙️ Postprocessing", expanded=True):
+                st.caption("Angezeigt werden nur die im Postprocessing tatsächlich verwendeten Optionen: Checkpoints, Cluster-Aktualisierung, Review, Reconstruction, optional Explainer und Top-Level-Ausgabe.")
+                checkpoint_every = st.number_input(
+                    "Checkpoint alle N Fragen",
+                    min_value=1,
+                    value=int(CONFIG["CHECKPOINT_EVERY"]),
+                    key="checkpoint_every",
+                    help="Postprocessing speichert ebenfalls Zwischenergebnisse. Niedrigere Werte reduzieren Datenverlust bei Abbruch, höhere Werte schreiben seltener.",
+                )
+                text_cluster_similarity = st.slider(
+                    "Question-Cluster Similarity",
+                    0.0,
+                    1.0,
+                    float(CONFIG["TEXT_CLUSTER_SIMILARITY"]),
+                    0.01,
+                    key="text_cluster_similarity",
+                    help="Postprocessing aktualisiert Frage-Cluster. Niedrigere Werte gruppieren mehr Fragen zusammen, höhere Werte sind konservativer.",
+                )
+                abstraction_cluster_similarity = st.slider(
+                    "Abstraction-Cluster Similarity",
+                    0.0,
+                    1.0,
+                    float(CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"]),
+                    0.01,
+                    key="abstraction_cluster_similarity",
+                    help="Postprocessing aktualisiert Abstraktionscluster. Niedrigere Werte erlauben breitere Gruppen, höhere Werte trennen stärker.",
+                )
+                enable_review_pass = st.checkbox(
+                    "Pass C (Deep Review) aktivieren",
+                    value=bool(selected_profile.enable_review_pass),
+                    key=f"{llm_provider}_enable_review_pass",
+                    help="Optionaler dritter Review-Pass für wartungsintensive Fragen. Aktiv prüft bestehende aiAudit-Ergebnisse gründlicher, verursacht aber zusätzliche Modellkosten.",
+                )
+                if enable_review_pass:
+                    st.caption(f"Pass C Modell: `{default_review_model}`")
+                    review_min_maintenance_severity = st.select_slider(
+                        "Pass C ab Wartungs-Severity",
+                        options=[1, 2, 3],
+                        value=int(CONFIG["REVIEW_MIN_MAINTENANCE_SEVERITY"]),
+                        key="review_min_maintenance_severity",
+                        help="Pass C läuft nur ab diesem Wartungs-Schweregrad. Niedrigere Werte prüfen mehr Fragen gründlich und erhöhen Qualität/Kosten. Höhere Werte beschränken den teuren Review auf kritischere Fälle.",
+                    )
+                    force_rerun_review = st.checkbox(
+                        "Review immer neu berechnen",
+                        value=False,
+                        help="Erzwingt eine Neuberechnung des Review-Passes, auch wenn bereits ein Ergebnis vorliegt. Aktiv ist sinnvoll nach Parameter-/Modelländerungen, kostet aber zusätzliche API-Aufrufe.",
+                    )
+                enable_reconstruction_pass = st.checkbox(
+                    "Reconstruction-Pass aktivieren",
+                    value=bool(selected_profile.enable_reconstruction_pass),
+                    key=f"{llm_provider}_enable_reconstruction_pass",
+                    help="Führt eine Rekonstruktions-/Altfrage-Bewertung pro Frage aus. Aktiv aktualisiert diese Audit-Sektion, deaktiviert blendet sie im Postprocessing aus und spart Kosten.",
+                )
+                if enable_reconstruction_pass:
+                    st.caption(f"Reconstruction Modell: `{default_reconstruction_model}`")
+                    force_rerun_reconstruction = st.checkbox(
+                        "Reconstruction immer neu berechnen",
+                        value=False,
+                        help="Erzwingt eine neue Reconstruction-Bewertung. Aktiv aktualisiert alte Ergebnisse zuverlässig; deaktiviert berechnet nur fehlende/fehlerhafte Einträge.",
+                    )
+                enable_explainer_pass = st.checkbox(
+                    "Explainer-Pass aktivieren",
+                    value=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
+                    key="enable_explainer_pass",
+                    help="Erzeugt didaktische Erklärungen auf bestehendem aiAudit. Aktiv verbessert Nachvollziehbarkeit, erzeugt aber zusätzliche Modellkosten.",
+                )
+                if enable_explainer_pass:
+                    explainer_model = str(default_explainer_model)
+                    st.caption(f"Explainer Modell: `{explainer_model}`")
+                    force_rerun_explainer = st.checkbox(
+                        "Explainer immer neu berechnen",
+                        value=False,
+                        help="Erzwingt eine neue didaktische Erklärung. Aktiv ist sinnvoll bei geänderten Modellen oder Promptlogik, erhöht aber Kosten; deaktiviert erhält vorhandene Erklärungen.",
+                    )
+                write_top_level = st.checkbox(
+                    "Top-Level ai* Felder schreiben",
+                    value=CONFIG["WRITE_TOP_LEVEL"],
+                    key="write_top_level",
+                    help="Postprocessing kann ai*-Kurzfelder aus dem aktualisierten aiAudit neu schreiben. Aktiv erleichtert Weiterverarbeitung; deaktiviert belässt Änderungen primär im aiAudit.",
+                )
+        else:
+            with st.expander("⚙️ Pipeline", expanded=False):
+                checkpoint_every = st.number_input(
+                    "Checkpoint alle N Fragen",
+                    min_value=1,
+                    value=int(CONFIG["CHECKPOINT_EVERY"]),
+                    key="checkpoint_every",
+                    help="Speichert regelmäßig Zwischenergebnisse. Niedrigere Werte reduzieren Datenverlust bei Abbruch, erzeugen aber mehr Schreibzugriffe. Höhere Werte sind etwas schneller, riskieren aber größere Wiederholungen nach Fehlern.",
+                )
+                text_cluster_similarity = st.slider(
+                    "Question-Cluster Similarity",
+                    0.0,
+                    1.0,
+                    float(CONFIG["TEXT_CLUSTER_SIMILARITY"]),
+                    0.01,
+                    key="text_cluster_similarity",
+                    help="Ähnlichkeitsschwelle für inhaltliche Frage-Cluster. Niedrigere Werte gruppieren mehr Fragen zusammen und können Wiederholungen stärker nutzen, riskieren aber falsche Cluster. Höhere Werte sind strenger und sicherer, finden aber weniger verwandte Fragen.",
+                )
+                abstraction_cluster_similarity = st.slider(
+                    "Abstraction-Cluster Similarity",
+                    0.0,
+                    1.0,
+                    float(CONFIG["ABSTRACTION_CLUSTER_SIMILARITY"]),
+                    0.01,
+                    key="abstraction_cluster_similarity",
+                    help="Ähnlichkeitsschwelle für Cluster der abstrahierten Fragen. Niedrigere Werte erlauben breitere thematische Gruppen; höhere Werte halten Cluster enger und reduzieren falsch zusammengeführte Themen.",
+                )
+                enable_review_pass = st.checkbox(
+                    "Pass C (Deep Review) aktivieren",
+                    value=bool(selected_profile.enable_review_pass),
+                    key=f"{llm_provider}_enable_review_pass",
+                    help="Optionaler dritter Review-Pass für wartungsintensive Fragen. Das Prioritätsprofil setzt nur den Startwert.",
+                )
+                review_model = str(default_review_model)
+                st.caption(f"Pass C Modell: `{review_model}`")
+                review_min_maintenance_severity = st.select_slider(
+                    "Pass C ab Wartungs-Severity",
+                    options=[1, 2, 3],
+                    value=int(CONFIG["REVIEW_MIN_MAINTENANCE_SEVERITY"]),
+                    key="review_min_maintenance_severity",
+                    help="Pass C läuft nur ab diesem Wartungs-Schweregrad. Niedrigere Werte prüfen mehr Fragen gründlich und erhöhen Qualität/Kosten. Höhere Werte beschränken den teuren Review auf kritischere Fälle.",
+                    disabled=not enable_review_pass,
+                )
+                enable_reconstruction_pass = st.checkbox(
+                    "Reconstruction-Pass aktivieren",
+                    value=bool(selected_profile.enable_reconstruction_pass),
+                    key=f"{llm_provider}_enable_reconstruction_pass",
+                    help="Führt eine Rekonstruktions-/Altfrage-Bewertung pro Frage aus und annotiert das Ergebnis. Das Prioritätsprofil setzt nur den Startwert.",
+                )
+                reconstruction_model = str(default_reconstruction_model)
+                st.caption(f"Reconstruction Modell: `{reconstruction_model}`")
+                resume = st.checkbox("Resume aktiv", value=CONFIG["RESUME"], key="resume", help="Überspringt bereits abgeschlossene Fragen mit passender Pipeline-Version. Aktiv spart Kosten bei Fortsetzungen; deaktiviert erzwingt eine vollständige Neuberechnung und kann bestehende KI-Annotationen aktualisieren.")
+                limit = st.number_input("Limit (0 = alle Fragen)", min_value=0, value=int(CONFIG["LIMIT"]), key="limit", help="Begrenzt die Anzahl verarbeiteter Fragen. 0 verarbeitet alles. Kleine Werte eignen sich für kostengünstige Testläufe; höhere Werte bzw. 0 führen den kompletten Workflow aus.")
                 sleep_seconds = st.number_input(
                     "Pause je Frage (Sek.)",
                     min_value=0.0,
                     value=float(CONFIG["SLEEP"]),
                     step=0.05,
-                    help="Kurze Pause zwischen zwei API-Aufrufen.",
+                    key="sleep_seconds",
+                    help="Kurze Pause zwischen zwei API-Aufrufen. Höhere Werte schonen Rate-Limits und reduzieren temporäre API-Fehler, verlängern aber die Laufzeit. Niedrigere Werte sind schneller, können bei großen Datensätzen aber eher Rate-Limits treffen.",
                 )
-                pass_a_model = st.text_input("Pass A Modell", value=default_pass_a_model, key=f"{llm_provider}_pass_a_model", help="Modell für Erstbewertung.")
-                pass_b_model = st.text_input("Pass B Modell", value=default_pass_b_model, key=f"{llm_provider}_pass_b_model", help="Modell für Verifikation/Review.")
+                pass_a_model = str(default_pass_a_model)
+                pass_b_model = str(default_pass_b_model)
+                st.caption(f"Pass A Modell: `{pass_a_model}`")
+                st.caption(f"Pass B Modell: `{pass_b_model}`")
                 pass_a_temperature = st.number_input(
                     "Pass A Temperature",
                     min_value=0.0,
                     max_value=2.0,
                     value=float(provider_defaults["pass_a_temperature"]),
+                    key=f"{llm_provider}_pass_a_temperature",
                     step=0.1,
-                    help="Sampling-Temperatur für Pass A.",
-                    disabled=auto_dataset_tuning,
+                    help="Sampling-Temperatur für Pass A. Das Prioritätsprofil setzt nur den Startwert.",
                 )
                 pass_b_reasoning_effort = st.selectbox(
                     "Pass B Reasoning Effort",
                     options=["low", "medium", "high", "xhigh"],
                     index=["low", "medium", "high", "xhigh"].index(str(provider_defaults["pass_b_reasoning_effort"])),
-                    help="Rechenaufwand für Pass B.",
-                    disabled=auto_dataset_tuning,
+                    key=f"{llm_provider}_pass_b_reasoning_effort",
+                    help="Rechenaufwand für Pass B. Das Prioritätsprofil setzt nur den Startwert.",
                 )
-                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf")
-                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf")
-                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b")
-                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold")
-
+                trigger_answer_conf = st.slider("Pass B Trigger: Answer Confidence", 0.0, 1.0, float(provider_defaults["trigger_answer_conf"]), 0.01, key=f"{llm_provider}_trigger_answer_conf", help="Antwort-Confidence unterhalb dieser Schwelle löst Pass B aus. Niedrigere Werte sparen Kosten, weil weniger Fälle verifiziert werden, riskieren aber unerkannte Fehler. Höhere Werte prüfen mehr unsichere Antworten und verbessern Qualität auf Kosten zusätzlicher API-Aufrufe.")
+                trigger_topic_conf = st.slider("Pass B Trigger: Topic Confidence", 0.0, 1.0, float(provider_defaults["trigger_topic_conf"]), 0.01, key=f"{llm_provider}_trigger_topic_conf", help="Topic-Confidence unterhalb dieser Schwelle löst Pass B aus. Niedriger ist kostenorientierter und akzeptiert mehr Pass-A-Zuordnungen. Höher ist qualitätsorientierter und überprüft mehr potenziell falsche Topic-Zuweisungen.")
+                apply_change_min_conf_b = st.slider("Änderung anwenden ab Pass-B Confidence", 0.0, 1.0, float(provider_defaults["apply_change_min_conf_b"]), 0.01, key=f"{llm_provider}_apply_change_min_conf_b", help="Mindestvertrauen, ab dem Pass-B-Korrekturen automatisch übernommen werden. Niedrigere Werte übernehmen mehr Änderungen, auch riskantere. Höhere Werte sind konservativer und lassen zweifelhafte Änderungen eher als Audit-Hinweis stehen.")
+                low_conf_maintenance_threshold = st.slider("Wartung markieren unter Confidence", 0.0, 1.0, float(provider_defaults["low_conf_maintenance_threshold"]), 0.01, key=f"{llm_provider}_low_conf_maintenance_threshold", help="Unterhalb dieser Gesamt-Confidence wird eine Frage als Wartungskandidat markiert. Niedrigere Werte erzeugen weniger Warnungen, können Problemfälle übersehen. Höhere Werte markieren mehr Fragen zur Prüfung und erhöhen die Review-Last.")
                 enable_repeat_reconstruction = st.checkbox(
                     "Repeat-Reconstruction aktivieren",
                     value=bool(CONFIG["ENABLE_REPEAT_RECONSTRUCTION"]),
-                    help="Erkennt wiederholte Fragen über Jahrgänge und ergänzt entsprechende Audit-Signale.",
-                    disabled=auto_dataset_tuning,
+                    key="enable_repeat_reconstruction",
+                    help="Erkennt wiederholte Fragen über Jahrgänge und ergänzt entsprechende Audit-Signale. Aktiv kann Qualität verbessern und Kosten sparen, weil Muster genutzt werden. Deaktiviert vermeidet falsche Wiederholungsannahmen bei sehr heterogenen Datensätzen.",
                 )
                 auto_apply_repeat_reconstruction = st.checkbox(
                     "Repeat-Reconstruction Auto-Apply (nur Audit-Suggestion)",
                     value=bool(CONFIG["AUTO_APPLY_REPEAT_RECONSTRUCTION"]),
+                    key="auto_apply_repeat_reconstruction",
+                    help="Wendet sichere Repeat-Reconstruction-Vorschläge automatisch als Audit-Suggestion an. Aktiv spart manuelle Prüfung bei klaren Wiederholungen; deaktiviert hält alle Vorschläge rein informativ.",
                     disabled=(not enable_repeat_reconstruction),
                 )
-                repeat_min_similarity = st.slider("Repeat: Min Similarity", 0.0, 1.0, float(CONFIG["REPEAT_MIN_SIMILARITY"]), 0.01, disabled=(not enable_repeat_reconstruction))
-                repeat_min_anchor_conf = st.slider("Repeat: Min Anchor Confidence", 0.0, 1.0, float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]), 0.01, disabled=(not enable_repeat_reconstruction))
-                repeat_min_anchor_consensus = st.number_input("Repeat: Min Anchor Consensus", min_value=1, value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]), step=1, disabled=(not enable_repeat_reconstruction))
-                repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, disabled=(not enable_repeat_reconstruction))
-
+                repeat_min_similarity = st.slider("Repeat: Min Similarity", 0.0, 1.0, float(CONFIG["REPEAT_MIN_SIMILARITY"]), 0.01, key="repeat_min_similarity", help="Mindestähnlichkeit, ab der Fragen als Wiederholungs-Kandidaten gelten. Niedrigere Werte finden mehr Kandidaten, riskieren aber falsche Matches. Höhere Werte sind sicherer, übersehen aber abgewandelte Wiederholungen.", disabled=(not enable_repeat_reconstruction))
+                repeat_min_anchor_conf = st.slider("Repeat: Min Anchor Confidence", 0.0, 1.0, float(CONFIG["REPEAT_MIN_ANCHOR_CONF"]), 0.01, key="repeat_min_anchor_conf", help="Mindestvertrauen für Ankerfragen, deren bekannte Bewertung Wiederholungen stützen darf. Niedriger nutzt mehr Anker, aber mit höherem Fehlerrisiko. Höher nutzt nur sehr sichere Anker und ist konservativer.", disabled=(not enable_repeat_reconstruction))
+                repeat_min_anchor_consensus = st.number_input("Repeat: Min Anchor Consensus", min_value=1, value=int(CONFIG["REPEAT_MIN_ANCHOR_CONSENSUS"]), step=1, key="repeat_min_anchor_consensus", help="Mindestanzahl unabhängiger Anker, die dieselbe Richtung stützen müssen. Niedrigere Werte sind sensitiver und günstiger; höhere Werte erhöhen Sicherheit, benötigen aber mehr passende Wiederholungen.", disabled=(not enable_repeat_reconstruction))
+                repeat_min_match_ratio = st.slider("Repeat: Min Match Ratio", 0.0, 1.0, float(CONFIG["REPEAT_MIN_MATCH_RATIO"]), 0.01, key="repeat_min_match_ratio", help="Mindestüberlappung zwischen Antworttexten von Anker und Ziel. Niedriger toleriert stärkere Umformulierungen, höher verlangt nahezu identische Antwortoptionen und reduziert Fehlübernahmen.", disabled=(not enable_repeat_reconstruction))
                 enable_explainer_pass = st.checkbox(
                     "Explainer-Pass aktivieren",
                     value=bool(CONFIG["ENABLE_EXPLAINER_PASS"]),
-                    help="Erzeugt eine didaktische Erklärung pro Frage im Audit.",
+                    key="enable_explainer_pass",
+                    help="Erzeugt eine didaktische Erklärung pro Frage im Audit. Aktiv liefert bessere Nachvollziehbarkeit für Lern-/Review-Zwecke, verursacht aber zusätzliche Modellkosten. Deaktiviert spart Kosten und Laufzeit.",
                 )
-                explainer_model = st.text_input(
-                    "Explainer Modell",
-                    value=str(default_explainer_model),
-                    key=f"{llm_provider}_explainer_model",
-                    disabled=(not enable_explainer_pass),
-                )
-
+                explainer_model = str(default_explainer_model)
+                st.caption(f"Explainer Modell: `{explainer_model}`")
                 write_top_level = st.checkbox(
                     "Top-Level ai* Felder schreiben",
                     value=CONFIG["WRITE_TOP_LEVEL"],
-                    help="Schreibt zusätzliche ai*-Felder direkt in jede Frage.",
-                    disabled=auto_dataset_tuning,
+                    key="write_top_level",
+                    help="Schreibt zusätzliche ai*-Felder direkt in jede Frage. Aktiv erleichtert Export/Weiterverarbeitung. Deaktiviert hält die Ausgabe schlanker und belässt Details primär im aiAudit.",
                 )
                 debug = st.checkbox(
                     "Debug-Rohdaten speichern",
                     value=CONFIG["DEBUG"],
-                    help="Speichert detaillierte Rohantworten unter aiAudit._debug.",
-                    disabled=auto_dataset_tuning,
+                    key="debug",
+                    help="Speichert detaillierte Rohantworten unter aiAudit._debug. Aktiv hilft bei Fehlersuche und Qualitätsprüfung, vergrößert aber Ausgaben und kann sensible Prompt-/Antwortdetails enthalten. Deaktiviert ist schlanker.",
                 )
 
+        knowledge_subject_hint = str(st.session_state.get("knowledge_subject_hint", subject_hint_default)).strip()
+        knowledge_top_k = int(kb_budget_defaults.knowledge_top_k)
+        knowledge_max_chars = int(kb_budget_defaults.knowledge_max_chars)
+        knowledge_min_score = float(kb_budget_defaults.knowledge_min_score)
+        knowledge_chunk_chars = int(CONFIG["KNOWLEDGE_CHUNK_CHARS"])
 
-        with st.expander("🧠 Knowledge Base", expanded=False):
-            knowledge_subject_hint = st.text_input(
-                "Subject Hint",
-                key="knowledge_subject_hint",
-                help="Standard wird aus dem Topic-Tree übernommen; kann hier manuell überschrieben werden.",
-            )
-            knowledge_top_k = st.number_input(
-                "Knowledge Top-K",
-                min_value=1,
-                value=int(kb_budget_defaults.knowledge_top_k),
-                key=f"{llm_provider}_knowledge_top_k",
-                help="Anzahl der Beleg-Chunks pro Frage.",
-                
-            )
-            knowledge_max_chars = st.number_input(
-                "Knowledge Max Chars",
-                min_value=500,
-                value=int(kb_budget_defaults.knowledge_max_chars),
-                key=f"{llm_provider}_knowledge_max_chars",
-                step=100,
-                help="Maximale Gesamtlänge der übergebenen Belege.",
-                
-            )
-            knowledge_min_score = st.slider(
-                "Knowledge Min Score",
-                0.0,
-                1.0,
-                float(kb_budget_defaults.knowledge_min_score),
-                0.01,
-                help="Mindestrelevanz eines Chunks.",
-                key=f"{llm_provider}_knowledge_min_score",
-                
-            )
-            knowledge_chunk_chars = st.number_input(
-                "Knowledge Chunk Chars",
-                min_value=200,
-                value=int(CONFIG["KNOWLEDGE_CHUNK_CHARS"]),
-                step=100,
-                help="Chunk-Größe beim Parsen der ZIP-Datei.",
-            )
+        if is_full_analysis or is_tuning_only:
+            with st.expander("🧠 Knowledge Base", expanded=False):
+                knowledge_subject_hint = st.text_input(
+                    "Subject Hint",
+                    key="knowledge_subject_hint",
+                    help="Fach-/Themenhinweis für die Knowledge-Base-Suche. Ein präziser Hinweis kann Retrieval-Treffer verbessern. Ein falscher oder zu enger Hinweis kann relevante Belege verdrängen; leer nutzt automatische Ableitung aus dem Topic-Tree.",
+                )
+                if is_full_analysis:
+                    knowledge_top_k = st.number_input(
+                        "Knowledge Top-K",
+                        min_value=1,
+                        value=int(kb_budget_defaults.knowledge_top_k),
+                        key=f"{llm_provider}_knowledge_top_k",
+                        help="Anzahl der Knowledge-Belege pro Frage. Höhere Werte geben dem Modell mehr Kontext und können die fachliche Sicherheit erhöhen, vergrößern aber Prompts und Kosten. Niedrigere Werte sparen Tokens und reduzieren Rauschen, können aber relevante Belege auslassen.",
+                    )
+                    knowledge_max_chars = st.number_input(
+                        "Knowledge Max Chars",
+                        min_value=500,
+                        value=int(kb_budget_defaults.knowledge_max_chars),
+                        key=f"{llm_provider}_knowledge_max_chars",
+                        step=100,
+                        help="Maximale Gesamtlänge aller Knowledge-Belege pro Frage. Höhere Werte erlauben ausführlicheren Kontext, erhöhen aber Tokenverbrauch und potenziell Ablenkung. Niedrigere Werte sind günstiger und fokussierter, riskieren aber abgeschnittene Begründungen.",
+                    )
+                    knowledge_min_score = st.slider(
+                        "Knowledge Min Score",
+                        0.0,
+                        1.0,
+                        float(kb_budget_defaults.knowledge_min_score),
+                        0.01,
+                        help="Mindestrelevanz eines Knowledge-Chunks. Niedrigere Werte geben mehr, aber potenziell schwächere Belege an das Modell. Höhere Werte reduzieren Kontext/Kosten und Rauschen, können aber hilfreiche Belege ausschließen.",
+                        key=f"{llm_provider}_knowledge_min_score",
+                    )
+                else:
+                    st.caption("Parameter-Einstellung nutzt die Knowledge Base zur Analyse, zeigt aber keine Detailparameter an, weil diese vom Tuning-Lauf ermittelt und gespeichert werden.")
+                knowledge_chunk_chars = st.number_input(
+                    "Knowledge Chunk Chars",
+                    min_value=200,
+                    value=int(CONFIG["KNOWLEDGE_CHUNK_CHARS"]),
+                    step=100,
+                    key="knowledge_chunk_chars",
+                    help="Chunk-Größe beim Parsen der Knowledge-ZIP. Kleinere Chunks erlauben präzisere Treffer, können aber Zusammenhänge zerlegen. Größere Chunks behalten Kontext, erhöhen jedoch Prompt-Länge und Kosten pro Treffer.",
+                )
+
+        if is_full_analysis:
+            with st.expander("💾 Einstellungen speichern", expanded=False):
+                save_ui_config_path = _file_picker_row(
+                    state_key="save_ui_config_file",
+                    label="Speicherziel UI-Konfig",
+                    default_path=_resolve_path(folder=data_folder, filename=analysis_config_default_name),
+                    start_dir=data_folder,
+                    help_text="JSON-Datei, in die die aktuell in der UI sichtbaren Workflow-Einstellungen gespeichert werden. API-Keys werden bewusst nicht gespeichert.",
+                    optional=False,
+                    require_existing=False,
+                )
+                current_settings_payload = {
+                    "llm_provider": llm_provider,
+                    "quality_cost_profile": quality_cost_profile,
+                    "resume": bool(resume),
+                    "limit": int(limit),
+                    "checkpoint_every": int(checkpoint_every),
+                    "sleep": float(sleep_seconds),
+                    "passA_temperature": float(pass_a_temperature),
+                    "passB_reasoning_effort": str(pass_b_reasoning_effort),
+                    "trigger_answer_conf": float(trigger_answer_conf),
+                    "trigger_topic_conf": float(trigger_topic_conf),
+                    "apply_change_min_conf_b": float(apply_change_min_conf_b),
+                    "low_conf_maintenance_threshold": float(low_conf_maintenance_threshold),
+                    "text_cluster_similarity": float(text_cluster_similarity),
+                    "abstraction_cluster_similarity": float(abstraction_cluster_similarity),
+                    "enable_review_pass": bool(enable_review_pass),
+                    "review_min_maintenance_severity": int(review_min_maintenance_severity),
+                    "enable_reconstruction_pass": bool(enable_reconstruction_pass),
+                    "enable_repeat_reconstruction": bool(enable_repeat_reconstruction),
+                    "auto_apply_repeat_reconstruction": bool(auto_apply_repeat_reconstruction),
+                    "repeat_min_similarity": float(repeat_min_similarity),
+                    "repeat_min_anchor_conf": float(repeat_min_anchor_conf),
+                    "repeat_min_anchor_consensus": int(repeat_min_anchor_consensus),
+                    "repeat_min_match_ratio": float(repeat_min_match_ratio),
+                    "enable_explainer_pass": bool(enable_explainer_pass),
+                    "write_top_level": bool(write_top_level),
+                    "debug": bool(debug),
+                    "knowledge_subject_hint": knowledge_subject_hint.strip(),
+                    "knowledge_top_k": int(knowledge_top_k),
+                    "knowledge_max_chars": int(knowledge_max_chars),
+                    "knowledge_min_score": float(knowledge_min_score),
+                    "knowledge_chunk_chars": int(knowledge_chunk_chars),
+                    "only_question_ids": [x.strip() for x in (only_question_ids_raw or "").split(",") if x.strip()],
+                }
+                if st.button(
+                    "Aktuelle Einstellungen speichern",
+                    key="save_current_ui_config",
+                    disabled=not bool(save_ui_config_path.strip()),
+                    help="Speichert genau die aktuell sichtbaren UI-Werte in die angegebene JSON-Datei. Diese Datei kann später über 'Einstellungen anwenden' wieder geladen und danach erneut manuell verändert werden.",
+                ):
+                    try:
+                        save_json(save_ui_config_path.strip(), current_settings_payload)
+                        st.success(f"Einstellungen gespeichert: {save_ui_config_path}")
+                    except Exception as exc:
+                        st.error(f"Einstellungen konnten nicht gespeichert werden: {exc}")
 
     return SimpleNamespace(
         postprocess_only=bool(is_postprocess_only),
@@ -675,6 +973,7 @@ def _build_args() -> SimpleNamespace:
         output=(output_path or _derive_output_path_from_input(input_path, output_folder)),
         api_key=api_key,
         llm_provider=llm_provider,
+        quality_cost_profile=quality_cost_profile,
         resume=resume,
         limit=int(limit),
         checkpoint_every=int(checkpoint_every),
@@ -766,7 +1065,6 @@ def main() -> None:
     st.caption("Konfiguration, API-Key und Live-Analysefortschritt in einer Oberfläche.")
 
     args = _build_args()
-    apply_model_optimized_defaults(args)
 
     start_label = "Parameter-Einstellung starten" if bool(getattr(args, "tuning_only", False)) else (("Explainer-Pass starten" if bool(getattr(args, "enable_explainer_pass", False)) and not bool(getattr(args, "enable_review_pass", False)) and not bool(getattr(args, "enable_reconstruction_pass", False)) else "Postprocessing starten") if bool(getattr(args, "postprocess_only", False)) else "Analyse starten")
     start_button = st.button(start_label, type="primary", use_container_width=True)
@@ -814,13 +1112,6 @@ def main() -> None:
         image_store = _prepare_image_store(args)
         knowledge_base = _prepare_knowledge_base(args, topic_tree)
 
-        if (not bool(getattr(args, "tuning_only", False))) and args.analysis_config_path and os.path.exists(args.analysis_config_path):
-            loaded_cfg = load_json(args.analysis_config_path)
-            if isinstance(loaded_cfg, dict):
-                for key, value in loaded_cfg.items():
-                    if hasattr(args, key):
-                        setattr(args, key, value)
-
         auto_report: Optional[str] = None
         if bool(getattr(args, "tuning_only", False)) and not bool(getattr(args, "postprocess_only", False)):
             status_text.markdown("**[autotune]** Analysiere Datensatz und ermittle passende Parameter …")
@@ -849,23 +1140,6 @@ def main() -> None:
                 if hasattr(args, key):
                     setattr(args, key, value)
 
-            provider_prefix = str(args.llm_provider)
-            state_map = {
-                "trigger_answer_conf": f"{provider_prefix}_trigger_answer_conf",
-                "trigger_topic_conf": f"{provider_prefix}_trigger_topic_conf",
-                "apply_change_min_conf_b": f"{provider_prefix}_apply_change_min_conf_b",
-                "low_conf_maintenance_threshold": f"{provider_prefix}_low_conf_maintenance_threshold",
-                "knowledge_top_k": f"{provider_prefix}_knowledge_top_k",
-                "knowledge_max_chars": f"{provider_prefix}_knowledge_max_chars",
-                "knowledge_min_score": f"{provider_prefix}_knowledge_min_score",
-            }
-            pending_updates: Dict[str, Any] = {}
-            for k, state_key in state_map.items():
-                if k in recommendations:
-                    pending_updates[state_key] = recommendations[k]
-            if pending_updates:
-                st.session_state["_pending_widget_updates"] = pending_updates
-
         if bool(getattr(args, "tuning_only", False)):
             if not auto_report:
                 auto_report = "Keine Auto-Tuning-Ergebnisse verfügbar."
@@ -873,6 +1147,7 @@ def main() -> None:
                 "llm_provider": args.llm_provider,
                 "created_from_input": args.input,
                 "settings": {
+                    "quality_cost_profile": args.quality_cost_profile,
                     "trigger_answer_conf": float(args.trigger_answer_conf),
                     "trigger_topic_conf": float(args.trigger_topic_conf),
                     "apply_change_min_conf_b": float(args.apply_change_min_conf_b),
